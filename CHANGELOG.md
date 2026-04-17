@@ -1,0 +1,41 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- `api/comments.ts` handles both `GET` and `POST` on one route.
+- Handler unit tests (vitest) covering method dispatch, validation, and the silent-RLS failure mode.
+- `npm run typecheck` script that type-checks `src/`, `api/`, and `demo/` together.
+- GitHub Actions CI: typecheck + tests + build on every pull request.
+- Vercel build now runs `npm run typecheck` before `vite build`, so type errors in `api/` block deploys.
+- README section describing the library-vs-demo repo layout and the reference backend.
+
+### Changed
+- **BREAKING:** `apiBase` is now a required prop on `<FeedbackWidget>`. Previously the library fell back to a hardcoded URL pointing at the maintainer's Vercel deployment, silently funneling every consumer's data into one shared backend. Consumers must now point at their own deployment.
+- `api/comments.ts` uses `.insert([...]).select()` so the server sends back the inserted row. Without `.select()`, Supabase responds `201` with no body even when RLS blocks the write, causing silent data loss.
+- `INVALID_CLASS_CHARS` → `INVALID_IDENT_CHARS` in `src/lib/getSelector.ts`; the regex applies to both id and class selectors.
+- `peerDependencies` widened to `react@^18 || ^19`.
+
+### Removed
+- `api/comment.ts` (singular). Collapsed into `api/comments.ts` (plural) with method dispatch.
+- `src/lib/supabase.ts` — unused dead code.
+- `sent` state and `fw-pop` keyframe — dead code.
+- Hardcoded `API_BASE` constant in the widget.
+
+### Fixed
+- `res.set()` calls that crashed every non-`OPTIONS` response path with `FUNCTION_INVOCATION_FAILED` on Vercel. `res.set()` is an Express-style method not implemented on `VercelResponse`. Removed; CORS headers are set globally by `vercel.json`.
+- `handleSend` now awaits the fetch with a synchronous `sendingRef` guard, preventing duplicate submissions from rapid Cmd+Enter. Optimistic sidebar update only runs on HTTP success, so failed requests no longer leave ghost comments in the UI.
+- `x` / `y` fields are validated as finite numbers on the server; non-numeric values now return a clean 400 instead of leaking the underlying Postgres error.
+
+### Security
+- Leaked Supabase anon key (committed in the initial commit and accidentally pushed) has been rotated. Git history was rewritten with `git filter-repo` to drop the `.env` blob.
+- Row Level Security is enabled on the `comments` and `projects` tables; the deployed API uses the `service_role` key to bypass RLS legitimately. Anon-key traffic to the DB is denied by default.
+
+## [0.3.4] - 2026-04-13
+
+Initial published prototype. See git history before the `1.0.0-pre` window for early changes.

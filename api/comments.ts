@@ -54,12 +54,21 @@ async function handlePost(req: VercelRequest, res: VercelResponse, supabase: Sup
     return res.status(400).json({ error: 'x and y must be finite numbers' })
   }
 
-  const { error } = await supabase.from('comments').insert([
-    { project_id: projectId, url, x, y, element, comment },
-  ] as never)
+  // .select() forces Prefer: return=representation so the server sends
+  // back the inserted row — or a 4xx if RLS blocked the write. Without
+  // it, insert() uses Prefer: return=minimal and silently reports
+  // success even when no row was stored.
+  const { data, error } = await supabase
+    .from('comments')
+    .insert([{ project_id: projectId, url, x, y, element, comment }] as never)
+    .select()
 
   if (error) {
     return res.status(500).json({ error: error.message })
+  }
+
+  if (!data || data.length === 0) {
+    return res.status(500).json({ error: 'Insert returned no row' })
   }
 
   return res.status(200).json({ success: true })

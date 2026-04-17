@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationDir": null,
+    "outDir": null,
+    "rootDir": ".",
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "feedback-widget": ["./src/index.ts"]
+    }
+  },
+  "include": ["src", "api", "demo"]
+}
