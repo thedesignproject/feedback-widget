@@ -18,13 +18,13 @@ Review scope: entire `feedback-widget` repository. Findings are grouped by sever
 | 10 | `sent` state is dead code | In PR #11 |
 | 11 | Dead ternary inside `!sidebarOpen` guard | In PR #11 |
 | 12 | `src/lib/supabase.ts` is unused dead code | In PR #11 |
-| 13 | `@supabase/supabase-js` bundled into library output | Open |
+| 13 | `@supabase/supabase-js` bundled into library output | In PR #12 |
 | 14 | Supabase error messages forwarded to clients | Open |
 | 15 | Unused `fw-pop` keyframe | In PR #11 |
 | 16 | `peerDependencies` says React 18, dev uses React 19 | In PR #11 |
 | 17 | `plan.md` schema does not match actual schema | Open |
-| 18 | Misleading comment | Open |
-| 19 | `INVALID_CLASS_CHARS` name/comment is misleading | Open |
+| 18 | Misleading comment | In PR #13 |
+| 19 | `INVALID_CLASS_CHARS` name/comment is misleading | In PR #13 |
 
 ## CRITICAL
 
@@ -109,7 +109,7 @@ Original finding: commit `858fe0c` contained a `.env` file with real credentials
 Never imported anywhere. The singleton also has a subtle bug: subsequent calls with different credentials silently return the first client. Remove the file, or use it and fix the cache key.
 
 ### 13. `@supabase/supabase-js` bundled into library output
-**Status:** Open.
+**Status:** In PR #12 — defensive externalization in `vite.config.ts`. Tree-shaking already keeps it out today since nothing reachable from `src/index.ts` imports it, so the fix guards against a future accidental import rather than correcting current output.
 
 `vite.config.ts:19` — React is externalized but Supabase is not, so the entire Supabase client is compiled into the dist bundle. Since the widget uses the Vercel API (not Supabase directly), this dependency is unused bloat.
 
@@ -138,12 +138,12 @@ Never imported anywhere. The singleton also has a subtle bug: subsequent calls w
 `plan.md` still describes `project_id` as UUID with FK, but it was migrated to `text` (see `supabase/migrate-project-id-to-text.sql`).
 
 ### 18. Misleading comment
-**Status:** Open.
+**Status:** In PR #13 — comment dropped.
 
 `src/components/FeedbackWidget.tsx:218` — says "Show eye button with blue ring" but the button actually shows a red X in selecting mode.
 
 ### 19. `INVALID_CLASS_CHARS` name/comment is misleading
-**Status:** Open.
+**Status:** In PR #13 — renamed to `INVALID_IDENT_CHARS`, comment updated to note it applies to both ids and classes.
 
 `src/lib/getSelector.ts:1-2` — used for both ID and class validation, not just classes. Rename or adjust the comment.
 
