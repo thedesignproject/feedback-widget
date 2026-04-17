@@ -60,6 +60,9 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
   const [badgeAnim, setBadgeAnim] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+  // Synchronous guard — state updates are async, so double-firing handleSend
+  // in the same tick (e.g. Cmd+Enter held down) would otherwise slip past `sending`.
+  const sendingRef = useRef(false)
 
   // --- Fetch comments on mount ---
   useEffect(() => {
@@ -157,72 +160,74 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
 
   // --- Send comment ---
   const handleSend = useCallback(async () => {
-    if (!comment.trim() || !target) return
+    if (!comment.trim() || !target || sendingRef.current) return
 
-    // Capture values before clearing state
+    sendingRef.current = true
+    setSending(true)
+
     const commentText = comment.trim()
     const targetData = { ...target }
 
-    setSending(true)
+    try {
+      const res = await fetch(`${API_BASE}/comment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          url: targetData.url,
+          x: targetData.xPercent,
+          y: targetData.yPercent,
+          element: targetData.selector,
+          comment: commentText,
+        }),
+      })
 
-    // Create local comment object immediately
-    const newComment: Comment = {
-      id: crypto.randomUUID(),
-      project_id: projectId,
-      url: targetData.url,
-      x: targetData.xPercent,
-      y: targetData.yPercent,
-      element: targetData.selector,
-      comment: commentText,
-      created_at: new Date().toISOString(),
-    }
+      if (!res.ok) {
+        console.warn('[FeedbackWidget] API returned', res.status)
+        return
+      }
 
-    // Fire API call (don't block UI on it)
-    fetch(`${API_BASE}/comment`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        projectId,
+      const newComment: Comment = {
+        id: crypto.randomUUID(),
+        project_id: projectId,
         url: targetData.url,
         x: targetData.xPercent,
         y: targetData.yPercent,
         element: targetData.selector,
         comment: commentText,
-      }),
-    })
-      .then((res) => {
-        if (!res.ok) console.warn('[FeedbackWidget] API returned', res.status)
-        else console.log('[FeedbackWidget] Comment saved to API')
-      })
-      .catch((err) => console.warn('[FeedbackWidget] API error:', err))
+        created_at: new Date().toISOString(),
+      }
 
-    // Update UI immediately — don't wait for API
-    setComments((prev) => [newComment, ...prev])
-    setNewCommentIds((prev) => new Set(prev).add(newComment.id))
+      setComments((prev) => [newComment, ...prev])
+      setNewCommentIds((prev) => new Set(prev).add(newComment.id))
 
-    setBadgeAnim(true)
-    setTimeout(() => setBadgeAnim(false), 400)
+      setBadgeAnim(true)
+      setTimeout(() => setBadgeAnim(false), 400)
 
-    setTimeout(() => {
-      setNewCommentIds((prev) => {
-        const next = new Set(prev)
-        next.delete(newComment.id)
-        return next
-      })
-    }, 2000)
+      setTimeout(() => {
+        setNewCommentIds((prev) => {
+          const next = new Set(prev)
+          next.delete(newComment.id)
+          return next
+        })
+      }, 2000)
 
-    setTarget(null)
-    setComment('')
-    setSending(false)
-    setHovered(null)
-    setMode('selecting') // Show eye button with blue ring during checkmark
-    setShowSuccess(true)
+      setTarget(null)
+      setComment('')
+      setHovered(null)
+      setMode('selecting')
+      setShowSuccess(true)
 
-    // After checkmark: stay in selecting mode, open sidebar
-    setTimeout(() => {
-      setShowSuccess(false)
-      setSidebarOpen(true)
-    }, 800)
+      setTimeout(() => {
+        setShowSuccess(false)
+        setSidebarOpen(true)
+      }, 800)
+    } catch (err) {
+      console.warn('[FeedbackWidget] API error:', err)
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
   }, [comment, target, projectId])
 
   // --- Keyboard: Escape to cancel popover / close sidebar, Cmd+Enter to send ---
