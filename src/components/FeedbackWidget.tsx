@@ -48,7 +48,6 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
   const [target, setTarget] = useState<ClickTarget | null>(null)
   const [comment, setComment] = useState('')
   const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   const [hovered, setHovered] = useState<Element | null>(null)
   const [btnHover, setBtnHover] = useState(false)
@@ -255,7 +254,6 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
     setTarget(null)
     setComment('')
     setSending(false)
-    setSent(false)
     setShowSuccess(false)
     setHovered(null)
   }
@@ -265,7 +263,6 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
     setTarget(null)
     setComment('')
     setSending(false)
-    setSent(false)
     setShowSuccess(false)
     setHovered(null)
   }
@@ -425,7 +422,7 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
       )}
 
       {/* Pin marker at clicked position */}
-      {mode === 'commenting' && target && !sent && (
+      {mode === 'commenting' && target && (
         <div
           {...{ [WIDGET_ATTR]: '' }}
           style={{
