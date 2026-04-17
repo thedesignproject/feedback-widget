@@ -1,12 +1,13 @@
-// Characters that are invalid in CSS class selectors (unescaped)
-const INVALID_CLASS_CHARS = /[^a-zA-Z0-9_-]/
+// Characters that would need escaping in a CSS identifier (used for both
+// id selectors and class selectors — same character rules for unescaped form).
+const INVALID_IDENT_CHARS = /[^a-zA-Z0-9_-]/
 
 function isValidClass(name: string): boolean {
-  return name.length > 0 && !INVALID_CLASS_CHARS.test(name)
+  return name.length > 0 && !INVALID_IDENT_CHARS.test(name)
 }
 
 export function getSelector(el: Element): string {
-  if (el.id && !INVALID_CLASS_CHARS.test(el.id)) return `#${el.id}`
+  if (el.id && !INVALID_IDENT_CHARS.test(el.id)) return `#${el.id}`
 
   const parts: string[] = []
   let current: Element | null = el
