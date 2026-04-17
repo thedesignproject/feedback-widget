@@ -12,9 +12,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const { projectId, url, x, y, element, comment } = req.body ?? {}
 
-  if (!projectId || !url || x == null || y == null || !element || !comment) {
+  if (!projectId || !url || !element || !comment) {
     return res.status(400).json({
-      error: 'Missing required fields: projectId, url, x, y, element, comment',
+      error: 'Missing required fields: projectId, url, element, comment',
+    })
+  }
+
+  if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) {
+    return res.status(400).json({
+      error: 'x and y must be finite numbers',
     })
   }
 
