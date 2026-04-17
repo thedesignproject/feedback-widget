@@ -671,7 +671,7 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
         style={{
           position: 'fixed',
           bottom: 24,
-          right: sidebarOpen ? 320 + 24 : 24,
+          right: 24,
           zIndex: 2147483647,
           transition: 'right 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
         }}
