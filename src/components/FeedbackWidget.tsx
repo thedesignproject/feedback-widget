@@ -47,7 +47,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [target, setTarget] = useState<ClickTarget | null>(null)
   const [comment, setComment] = useState('')
   const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   const [hovered, setHovered] = useState<Element | null>(null)
   const [btnHover, setBtnHover] = useState(false)
@@ -254,7 +253,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     setTarget(null)
     setComment('')
     setSending(false)
-    setSent(false)
     setShowSuccess(false)
     setHovered(null)
   }
@@ -264,7 +262,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     setTarget(null)
     setComment('')
     setSending(false)
-    setSent(false)
     setShowSuccess(false)
     setHovered(null)
   }
@@ -424,7 +421,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       )}
 
       {/* Pin marker at clicked position */}
-      {mode === 'commenting' && target && !sent && (
+      {mode === 'commenting' && target && (
         <div
           {...{ [WIDGET_ATTR]: '' }}
           style={{
@@ -673,7 +670,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         style={{
           position: 'fixed',
           bottom: 24,
-          right: sidebarOpen ? 320 + 24 : 24,
+          right: 24,
           zIndex: 2147483647,
           transition: 'right 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
         }}
@@ -775,11 +772,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
       {/* Keyframes */}
       <style>{`
-        @keyframes fw-pop {
-          0% { transform: scale(0.5); opacity: 0; }
-          60% { transform: scale(1.2); }
-          100% { transform: scale(1); opacity: 1; }
-        }
         @keyframes fw-badge-pop {
           0% { transform: scale(1); }
           30% { transform: scale(1.3); }
