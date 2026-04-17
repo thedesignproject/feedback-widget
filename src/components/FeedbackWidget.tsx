@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getSelector } from '../lib/getSelector'
 
-const API_BASE = 'https://feedback-widget-sigma.vercel.app/api'
-
 interface FeedbackWidgetProps {
   projectId: string
+  apiBase: string
 }
 
 type Mode = 'idle' | 'selecting' | 'commenting'
@@ -43,7 +42,7 @@ function timeAgo(date: string): string {
   return `${days}d ago`
 }
 
-export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
+export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [mode, setMode] = useState<Mode>('idle')
   const [target, setTarget] = useState<ClickTarget | null>(null)
   const [comment, setComment] = useState('')
@@ -65,7 +64,7 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
   useEffect(() => {
     async function fetchComments() {
       try {
-        const res = await fetch(`${API_BASE}/comments?projectId=${encodeURIComponent(projectId)}`)
+        const res = await fetch(`${apiBase}/comments?projectId=${encodeURIComponent(projectId)}`)
         if (!res.ok) return
         const data = await res.json()
         if (Array.isArray(data)) {
@@ -76,7 +75,7 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
       }
     }
     fetchComments()
-  }, [projectId])
+  }, [projectId, apiBase])
 
   // --- Set crosshair cursor on body when selecting ---
   useEffect(() => {
@@ -178,7 +177,7 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
     }
 
     // Fire API call (don't block UI on it)
-    fetch(`${API_BASE}/comment`, {
+    fetch(`${apiBase}/comment`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -223,7 +222,7 @@ export function FeedbackWidget({ projectId }: FeedbackWidgetProps) {
       setShowSuccess(false)
       setSidebarOpen(true)
     }, 800)
-  }, [comment, target, projectId])
+  }, [comment, target, projectId, apiBase])
 
   // --- Keyboard: Escape to cancel popover / close sidebar, Cmd+Enter to send ---
   useEffect(() => {
