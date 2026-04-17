@@ -167,7 +167,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     const targetData = { ...target }
 
     try {
-      const res = await fetch(`${apiBase}/comment`, {
+      const res = await fetch(`${apiBase}/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
