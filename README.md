@@ -40,12 +40,18 @@ This widget does not ship with a hosted backend. You run your own. The repo incl
 - `api/comment.ts` — `POST` handler that writes a comment to Supabase.
 - `api/comments.ts` — `GET` handler that lists comments for a `projectId`.
 - `supabase/schema.sql` — database schema.
+- `supabase/migrate-enable-rls.sql` — locks the tables down so only the server can read/write.
 
 Steps:
 
-1. Create a Supabase project and run `supabase/schema.sql` to create the `comments` table.
-2. Deploy the `api/` functions (e.g. to Vercel). Set `SUPABASE_URL` and `SUPABASE_KEY` as environment variables on that deployment.
-3. Point `apiBase` at your deployment's `/api` URL.
+1. Create a Supabase project and run `supabase/schema.sql` to create the tables.
+2. Run `supabase/migrate-enable-rls.sql`. This enables Row Level Security with no policies, so the anon/public key is denied everything — all access must flow through the API.
+3. Deploy the `api/` functions (e.g. to Vercel). Set these environment variables on the deployment:
+   - `SUPABASE_URL` — your Supabase project URL.
+   - `SUPABASE_SERVICE_ROLE_KEY` — the **service_role** key from your Supabase dashboard (Settings → API). This key bypasses RLS and must never be exposed to a browser. Do not put it in any `VITE_*` variable.
+4. Point `apiBase` at your deployment's `/api` URL.
+
+> **Security note.** The anon/publishable key is never used here. All access to Supabase goes through the API functions using the service_role key. If you ever leak the service_role key, rotate it immediately in the Supabase dashboard.
 
 ## Requirements
 
