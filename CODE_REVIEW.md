@@ -7,7 +7,7 @@ Review scope: entire `feedback-widget` repository. Findings are grouped by sever
 | # | Title | Status |
 | --- | --- | --- |
 | 1 | Supabase credentials in git history | Mitigated |
-| 2 | No RLS on `comments` table | Open |
+| 2 | No RLS on `comments` table | In PR #15 |
 | 3 | `GET /api/comments` endpoint does not exist | In PR #8 |
 | 4 | README documents non-existent props | In PR #9 |
 | 5 | Hardcoded API URL in distributed package | In PR #9 |
@@ -36,7 +36,7 @@ Caveat: GitHub does not immediately garbage-collect unreferenced commits. The ol
 Original finding: commit `858fe0c` contained a `.env` file with real credentials (`VITE_SUPABASE_URL` and `VITE_SUPABASE_KEY`). The file was deleted in a later commit but was permanently recoverable via `git show 858fe0c:.env`.
 
 ### 2. No Row Level Security (RLS) on `comments` table
-**Status:** Open.
+**Status:** In PR #15 (stacked on PR #9). Adds `supabase/migrate-enable-rls.sql` that enables RLS on both tables with no policies — anon/public roles are denied everything by default. API functions are switched to read `SUPABASE_SERVICE_ROLE_KEY` (a small follow-up was pushed to PR #8 so both API handlers use the same var name). README documents the new setup and the rule that the service-role key must never be inlined into the client bundle.
 
 `supabase/schema.sql` — no `ENABLE ROW LEVEL SECURITY`, no policies. Anyone with the anon key can `SELECT`, `INSERT`, `UPDATE`, or `DELETE` all comments across all projects. Zero tenant isolation.
 
