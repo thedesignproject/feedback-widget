@@ -13,7 +13,7 @@ Review scope: entire `feedback-widget` repository. Findings are grouped by sever
 | 5 | Hardcoded API URL in distributed package | In PR #9 |
 | 6 | `setSending(false)` runs before fetch resolves | In PR #10 |
 | 7 | No auth, rate limiting, or size limits on the API | Open |
-| 8 | `x`/`y` not validated as numbers | Open |
+| 8 | `x`/`y` not validated as numbers | In PR #14 |
 | 9 | CORS headers missing on error responses | Open |
 | 10 | `sent` state is dead code | In PR #11 |
 | 11 | Dead ternary inside `!sidebarOpen` guard | In PR #11 |
@@ -80,7 +80,7 @@ Original finding: commit `858fe0c` contained a `.env` file with real credentials
 **Action:** Add rate limiting, input size caps, and consider a shared secret or signed request scheme.
 
 ### 8. `x`/`y` not validated as numbers
-**Status:** Open.
+**Status:** In PR #14 — splits the check into presence of required string fields plus a `typeof 'number' && Number.isFinite` check for `x`/`y`. Rejects with a clean 400. Range validation (0–100 for percentages) is out of scope here — belongs to item #7.
 
 `api/comment.ts:22-28` — only checks `x == null || y == null`, not that they are numeric. Non-numeric values will cause a Postgres type error, and the raw error message is leaked to the caller (`error.message` on line 51).
 
