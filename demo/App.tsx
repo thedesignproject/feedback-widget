@@ -1,5 +1,11 @@
 import { FeedbackWidget } from 'feedback-widget'
 
+const apiBase = import.meta.env.VITE_API_BASE
+const projectId = import.meta.env.VITE_PROJECT_ID
+if (!apiBase || !projectId) {
+  throw new Error('VITE_API_BASE and VITE_PROJECT_ID are required. Copy .env.example to .env and fill them in.')
+}
+
 export function App() {
   return (
     <div style={{ padding: '2rem', fontFamily: 'system-ui, sans-serif' }}>
@@ -14,7 +20,7 @@ export function App() {
         </button>
       </div>
 
-      <FeedbackWidget projectId="demo-project" apiBase="https://feedback-widget-sigma.vercel.app/api" />
+      <FeedbackWidget projectId={projectId} apiBase={apiBase} />
     </div>
   )
 }
