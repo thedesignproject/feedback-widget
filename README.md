@@ -17,11 +17,7 @@ export default function App() {
   return (
     <>
       {/* your app */}
-      <FeedbackWidget
-        projectId="your-project-name"
-        supabaseUrl="YOUR_SUPABASE_URL"
-        supabaseKey="YOUR_SUPABASE_KEY"
-      />
+      <FeedbackWidget projectId="your-project-name" />
     </>
   )
 }
