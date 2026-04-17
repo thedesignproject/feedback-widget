@@ -14,7 +14,7 @@ export function App() {
         </button>
       </div>
 
-      <FeedbackWidget projectId="demo-project" />
+      <FeedbackWidget projectId="demo-project" apiBase="https://feedback-widget-sigma.vercel.app/api" />
     </div>
   )
 }
