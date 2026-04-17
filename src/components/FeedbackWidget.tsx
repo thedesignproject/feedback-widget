@@ -213,7 +213,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     setComment('')
     setSending(false)
     setHovered(null)
-    setMode('selecting') // Show eye button with blue ring during checkmark
+    setMode('selecting')
     setShowSuccess(true)
 
     // After checkmark: stay in selecting mode, open sidebar
