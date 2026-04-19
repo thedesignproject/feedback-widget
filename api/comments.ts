@@ -17,6 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'GET') return handleGet(req, res, supabase)
   if (req.method === 'POST') return handlePost(req, res, supabase)
+  if (req.method === 'DELETE') return handleDelete(req, res, supabase)
 
   return res.status(405).json({ error: 'Method not allowed' })
 }
@@ -39,6 +40,25 @@ async function handleGet(req: VercelRequest, res: VercelResponse, supabase: Supa
   }
 
   return res.status(200).json(data ?? [])
+}
+
+async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+
+  if (!projectId) {
+    return res.status(400).json({ error: 'Missing required query param: projectId' })
+  }
+
+  const { error } = await supabase
+    .from('comments')
+    .delete()
+    .eq('project_id', projectId)
+
+  if (error) {
+    return res.status(500).json({ error: error.message })
+  }
+
+  return res.status(200).json({ success: true })
 }
 
 async function handlePost(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {

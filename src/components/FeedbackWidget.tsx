@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { MessageCircle, LogOut, Menu, X } from 'lucide-react'
+import { VtooltipRoot, VtooltipItem, VtooltipTrigger, VtooltipContent } from './VTooltipMenu'
 import { getSelector } from '../lib/getSelector'
 
 interface FeedbackWidgetProps {
@@ -10,11 +12,9 @@ type Mode = 'idle' | 'selecting' | 'commenting'
 
 interface ClickTarget {
   selector: string
-  xPercent: number
-  yPercent: number
+  x: number  // page-relative px
+  y: number  // page-relative px
   url: string
-  clickX: number
-  clickY: number
 }
 
 interface Comment {
@@ -25,6 +25,7 @@ interface Comment {
   y: number
   element: string
   comment: string
+  status: string
   created_at: string
 }
 
@@ -51,6 +52,16 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [hovered, setHovered] = useState<Element | null>(null)
   const [btnHover, setBtnHover] = useState(false)
 
+  // Draggable pill state
+  const [pillPos, setPillPos] = useState({ x: window.innerWidth - 72, y: window.innerHeight - 200 })
+  const dragging = useRef(false)
+  const dragOffset = useRef({ x: 0, y: 0 })
+  const didDrag = useRef(false)
+  const pillRef = useRef<HTMLDivElement>(null)
+
+  // Pin state
+  const [selectedPin, setSelectedPin] = useState<string | null>(null)
+
   // Sidebar state
   const [comments, setComments] = useState<Comment[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -70,7 +81,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         if (!res.ok) return
         const data = await res.json()
         if (Array.isArray(data)) {
-          setComments(data)
+          setComments(data.map((c: any) => ({ ...c, status: c.status || 'pending' })))
         }
       } catch {
         // endpoint not ready yet — use empty array
@@ -134,13 +145,12 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       e.preventDefault()
       e.stopPropagation()
 
+      setSelectedPin(null)
       setTarget({
         selector: getSelector(el),
-        xPercent: (e.clientX / window.innerWidth) * 100,
-        yPercent: (e.clientY / window.innerHeight) * 100,
+        x: e.pageX,
+        y: e.pageY,
         url: window.location.href,
-        clickX: e.clientX,
-        clickY: e.clientY,
       })
       setMode('commenting')
     }
@@ -173,8 +183,8 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         body: JSON.stringify({
           projectId,
           url: targetData.url,
-          x: targetData.xPercent,
-          y: targetData.yPercent,
+          x: targetData.x,
+          y: targetData.y,
           element: targetData.selector,
           comment: commentText,
         }),
@@ -189,10 +199,11 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         id: crypto.randomUUID(),
         project_id: projectId,
         url: targetData.url,
-        x: targetData.xPercent,
-        y: targetData.yPercent,
+        x: targetData.x,
+        y: targetData.y,
         element: targetData.selector,
         comment: commentText,
+        status: 'pending',
         created_at: new Date().toISOString(),
       }
 
@@ -214,12 +225,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       setComment('')
       setHovered(null)
       setMode('selecting')
-      setShowSuccess(true)
-
-      setTimeout(() => {
-        setShowSuccess(false)
-        setSidebarOpen(true)
-      }, 800)
     } catch (err) {
       console.warn('[FeedbackWidget] API error:', err)
     } finally {
@@ -228,12 +233,16 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     }
   }, [comment, target, projectId, apiBase])
 
-  // --- Keyboard: Escape to cancel popover / close sidebar, Cmd+Enter to send ---
+  // --- Keyboard shortcuts ---
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement).tagName
+      const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+
       if (e.key === 'Escape') {
-        if (mode === 'commenting') {
-          // Close popover, stay in selecting mode
+        if (selectedPin) {
+          setSelectedPin(null)
+        } else if (mode === 'commenting') {
           setTarget(null)
           setComment('')
           setSending(false)
@@ -241,16 +250,26 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         } else if (sidebarOpen) {
           setSidebarOpen(false)
         }
-        // Don't exit selecting mode on Escape — only the eye button does that
       }
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && mode === 'commenting') {
         handleSend()
       }
+
+      // Single-key shortcuts — skip when typing in an input
+      if (isTyping) return
+
+      if (e.key === 'c' || e.key === 'C') {
+        if (mode !== 'idle') { exitFeedbackMode() } else { enterFeedbackMode() }
+      }
+      if (e.key === 's' || e.key === 'S') {
+        enterFeedbackMode()
+      }
+      if (e.key === 'm' || e.key === 'M' || e.key === 'f' || e.key === 'F') {
+        setSidebarOpen((v) => !v)
+      }
     }
-    if (mode !== 'idle' || sidebarOpen) {
-      window.addEventListener('keydown', onKey)
-      return () => window.removeEventListener('keydown', onKey)
-    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [mode, handleSend, sidebarOpen])
 
   function reset() {
@@ -269,12 +288,40 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     setSending(false)
     setShowSuccess(false)
     setHovered(null)
+    setSelectedPin(null)
   }
 
   function enterFeedbackMode() {
     // Keep sidebar open — user can comment while viewing the list
     setMode('selecting')
   }
+
+  // --- Drag handlers for pill ---
+  function onPillPointerDown(e: React.PointerEvent) {
+    dragging.current = true
+    didDrag.current = false
+    dragOffset.current = { x: e.clientX - pillPos.x, y: e.clientY - pillPos.y }
+    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+  }
+
+  useEffect(() => {
+    function onMove(e: PointerEvent) {
+      if (!dragging.current) return
+      didDrag.current = true
+      const x = Math.max(0, Math.min(window.innerWidth - 48, e.clientX - dragOffset.current.x))
+      const y = Math.max(0, Math.min(window.innerHeight - 160, e.clientY - dragOffset.current.y))
+      setPillPos({ x, y })
+    }
+    function onUp() {
+      dragging.current = false
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [pillPos])
 
   function handleEyeClick() {
     if (mode !== 'idle') {
@@ -302,16 +349,18 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     }
   }
 
-  // --- Popover position ---
+  // --- Popover position (page-relative, converted to fixed via scroll offset) ---
   const popoverStyle = (): React.CSSProperties => {
     if (!target) return { display: 'none' }
-    const pad = 12
+    const pad = 16
     const popW = 300
     const popH = 180
-    let left = target.clickX + pad
-    let top = target.clickY + pad
-    if (left + popW > window.innerWidth) left = target.clickX - popW - pad
-    if (top + popH > window.innerHeight) top = target.clickY - popH - pad
+    const fixedX = target.x - window.scrollX
+    const fixedY = target.y - window.scrollY
+    let left = fixedX + pad
+    let top = fixedY + pad
+    if (left + popW > window.innerWidth) left = fixedX - popW - pad
+    if (top + popH > window.innerHeight) top = fixedY - popH - pad
     if (left < pad) left = pad
     if (top < pad) top = pad
     return {
@@ -320,6 +369,31 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       top,
       zIndex: 2147483646,
     }
+  }
+
+  // --- Pin popover position for viewing existing comments ---
+  const pinPopoverStyle = (c: Comment): React.CSSProperties => {
+    const pad = 16
+    const popW = 280
+    const fixedX = c.x - window.scrollX
+    const fixedY = c.y - window.scrollY
+    let left = fixedX + pad
+    let top = fixedY - 20
+    if (left + popW > window.innerWidth) left = fixedX - popW - pad
+    if (left < pad) left = pad
+    if (top < pad) top = fixedY + 40
+    return {
+      position: 'fixed',
+      left,
+      top,
+      zIndex: 2147483646,
+    }
+  }
+
+  const statusColors: Record<string, { bg: string; text: string; label: string }> = {
+    pending: { bg: '#fef3c7', text: '#92400e', label: 'Pending' },
+    approved: { bg: '#d1fae5', text: '#065f46', label: 'Approved' },
+    rejected: { bg: '#fee2e2', text: '#991b1b', label: 'Rejected' },
   }
 
   const commentCount = comments.length
@@ -425,25 +499,112 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         </>
       )}
 
-      {/* Pin marker at clicked position */}
+      {/* New comment pin at clicked position */}
       {mode === 'commenting' && target && (
         <div
           {...{ [WIDGET_ATTR]: '' }}
           style={{
-            position: 'fixed',
-            left: target.clickX - 6,
-            top: target.clickY - 6,
-            width: 12,
-            height: 12,
-            borderRadius: '50%',
-            background: '#3b82f6',
-            border: '2px solid #fff',
-            boxShadow: '0 1px 4px rgba(0,0,0,0.2)',
+            position: 'absolute',
+            left: target.x - 12,
+            top: target.y - 32,
             zIndex: 2147483646,
             pointerEvents: 'none',
           }}
-        />
+        >
+          <svg width="24" height="32" viewBox="0 0 24 32" fill="none">
+            <path d="M12 0C5.373 0 0 5.373 0 12c0 9 12 20 12 20s12-11 12-20C24 5.373 18.627 0 12 0z" fill="#111" />
+            <circle cx="12" cy="12" r="8" fill="#111" />
+            <text x="12" y="16" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="700" fontFamily="-apple-system, BlinkMacSystemFont, sans-serif">
+              {comments.length + 1}
+            </text>
+          </svg>
+        </div>
       )}
+
+      {/* Persisted comment pins */}
+      {comments.map((c, i) => {
+        const pinNumber = comments.length - i
+        const isSelected = selectedPin === c.id
+        return (
+          <div key={c.id} {...{ [WIDGET_ATTR]: '' }}>
+            {/* Pin marker */}
+            <div
+              onClick={(e) => {
+                e.stopPropagation()
+                setSelectedPin(isSelected ? null : c.id)
+              }}
+              style={{
+                position: 'absolute',
+                left: c.x - 12,
+                top: c.y - 32,
+                zIndex: isSelected ? 2147483646 : 2147483640,
+                cursor: 'pointer',
+                transition: 'transform 0.15s',
+                transform: isSelected ? 'scale(1.15)' : 'scale(1)',
+              }}
+            >
+              <svg width="24" height="32" viewBox="0 0 24 32" fill="none">
+                <path d="M12 0C5.373 0 0 5.373 0 12c0 9 12 20 12 20s12-11 12-20C24 5.373 18.627 0 12 0z" fill={isSelected ? '#3b82f6' : '#111'} />
+                <circle cx="12" cy="12" r="8" fill={isSelected ? '#3b82f6' : '#111'} />
+                <text x="12" y="16" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="700" fontFamily="-apple-system, BlinkMacSystemFont, sans-serif">
+                  {pinNumber}
+                </text>
+              </svg>
+            </div>
+
+            {/* Pin detail popover */}
+            {isSelected && (
+              <>
+                <div
+                  onClick={() => setSelectedPin(null)}
+                  style={{ position: 'fixed', inset: 0, zIndex: 2147483645 }}
+                />
+                <div
+                  style={{
+                    ...pinPopoverStyle(c),
+                    width: 280,
+                    background: '#fff',
+                    borderRadius: 10,
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08)',
+                    padding: 14,
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#666' }}>
+                      #{pinNumber} &middot; {timeAgo(c.created_at)}
+                    </span>
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      padding: '2px 8px',
+                      borderRadius: 9999,
+                      background: (statusColors[c.status] || statusColors.pending).bg,
+                      color: (statusColors[c.status] || statusColors.pending).text,
+                    }}>
+                      {(statusColors[c.status] || statusColors.pending).label}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 14, lineHeight: 1.5, color: '#111' }}>
+                    {c.comment}
+                  </div>
+                  <div style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    color: '#999',
+                    fontFamily: '"SF Mono", "Fira Code", Menlo, monospace',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {c.element}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )
+      })}
 
       {/* Sidebar */}
       <div
@@ -668,112 +829,121 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         </div>
       </div>
 
-      {/* Trigger button — hidden when sidebar is open and idle */}
-      {!sidebarOpen && (
+      {/* Floating draggable pill with tooltip menu */}
       <div
+        ref={pillRef}
         {...{ [WIDGET_ATTR]: '' }}
+        onPointerDown={onPillPointerDown}
         style={{
           position: 'fixed',
-          bottom: 24,
-          right: 24,
+          left: pillPos.x,
+          top: pillPos.y,
           zIndex: 2147483647,
-          transition: 'right 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+          cursor: dragging.current ? 'grabbing' : 'grab',
+          userSelect: 'none',
+          touchAction: 'none',
         }}
       >
-        <button
-          onClick={handleEyeClick}
-          onMouseEnter={() => setBtnHover(true)}
-          onMouseLeave={() => setBtnHover(false)}
-          style={{
-            width: 64,
-            height: 64,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0,
-            border: 'none',
-            borderRadius: '50%',
-            cursor: 'pointer',
-            background:
-              mode === 'selecting' || mode === 'commenting'
-                ? '#c0392b'
-                : btnHover
-                  ? '#222'
-                  : '#111',
-            boxShadow: showSuccess
-              ? '0 0 0 3px #22c55e, 0 4px 16px rgba(0,0,0,0.2)'
-              : mode === 'selecting' || mode === 'commenting'
-                ? '0 0 0 3px #3b82f6, 0 4px 16px rgba(0,0,0,0.2)'
-                : '0 4px 16px rgba(0,0,0,0.2)',
-            transition: 'background 0.2s, box-shadow 0.2s, transform 0.15s',
-            transform: btnHover ? 'scale(1.06)' : 'scale(1)',
-          }}
-        >
-          {showSuccess ? (
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-              <path
-                d="M7 14.5L12 19.5L21 9.5"
-                stroke="#22c55e"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          ) : mode === 'selecting' || mode === 'commenting' ? (
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-              <line x1="9" y1="9" x2="19" y2="19" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-              <line x1="19" y1="9" x2="9" y2="19" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
-            </svg>
-          ) : (
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-              <circle cx="16" cy="16" r="13" stroke="#fff" strokeWidth="1.5" fill="none" />
-              <circle
-                cx="16"
-                cy="16"
-                r={btnHover ? 7 : 6}
-                fill="#fff"
-                style={{ transition: 'r 0.2s' }}
-              />
-              <circle cx="16" cy="16" r="3" fill="#111" />
-              <circle cx="18.5" cy="13.5" r="1.2" fill="#fff" />
-            </svg>
-          )}
-        </button>
-
-        {/* Badge */}
-        {commentCount > 0 && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setSidebarOpen((v) => !v)
-            }}
+        <VtooltipRoot springConfig={{ type: 'spring' as const, stiffness: 400, damping: 30, mass: 0.8 }}>
+          <div
             style={{
-              position: 'absolute',
-              top: -4,
-              right: -4,
-              minWidth: 22,
-              height: 22,
-              display: 'flex',
+              display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              padding: '0 6px',
-              background: '#3b82f6',
-              color: '#fff',
-              fontSize: 11,
-              fontWeight: 700,
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-              border: '2px solid #111',
-              borderRadius: 11,
-              cursor: 'pointer',
-              animation: badgeAnim ? 'fw-badge-pop 0.4s ease' : 'none',
-              transition: 'transform 0.15s',
+              overflow: 'hidden',
+              padding: '6px 6px',
+              borderRadius: 9999,
+              background: '#000',
+              flexDirection: 'column',
+              gap: 2,
             }}
           >
-            {commentCount}
-          </button>
-        )}
+            {/* Comment */}
+            <VtooltipItem index={0}>
+              <VtooltipTrigger
+                onClick={(e) => {
+                  if (didDrag.current) { e.preventDefault(); return }
+                  if (mode !== 'idle') { exitFeedbackMode() } else { enterFeedbackMode() }
+                }}
+              >
+                <div className="fw-pill-icon" style={{ position: 'relative', display: 'flex', width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 9999, background: mode !== 'idle' ? 'rgba(255,255,255,0.1)' : 'transparent' }}>
+                  {mode !== 'idle' ? (
+                    <X style={{ width: 18, height: 18 }} />
+                  ) : (
+                    <MessageCircle style={{ width: 18, height: 18 }} />
+                  )}
+                </div>
+                <span style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0 }}>Comment</span>
+              </VtooltipTrigger>
+              <VtooltipContent>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap', padding: '0 8px', fontSize: 14, fontWeight: 500, lineHeight: 1.2, letterSpacing: '-0.01em', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+                  {mode !== 'idle' ? 'Exit' : 'Comment'}
+                  <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 3, border: '1px solid rgba(255,255,255,0.3)', padding: 2, fontSize: 12, color: '#fff' }}>C</span>
+                </div>
+              </VtooltipContent>
+            </VtooltipItem>
+
+            {/* Share */}
+            <VtooltipItem index={1}>
+              <VtooltipTrigger
+                onClick={(e) => {
+                  if (didDrag.current) { e.preventDefault(); return }
+                  enterFeedbackMode()
+                }}
+              >
+                <div className="fw-pill-icon" style={{ position: 'relative', display: 'flex', width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 9999 }}>
+                  <LogOut style={{ width: 18, height: 18, transform: 'rotate(-90deg)' }} />
+                </div>
+                <span style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0 }}>Share</span>
+              </VtooltipTrigger>
+              <VtooltipContent>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap', padding: '0 8px', fontSize: 14, fontWeight: 500, lineHeight: 1.2, letterSpacing: '-0.01em', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+                  Share
+                </div>
+              </VtooltipContent>
+            </VtooltipItem>
+
+            {/* Menu */}
+            <VtooltipItem index={2}>
+              <VtooltipTrigger
+                onClick={(e) => {
+                  if (didDrag.current) { e.preventDefault(); return }
+                  setSidebarOpen((v) => !v)
+                }}
+              >
+                <div className="fw-pill-icon" style={{ position: 'relative', display: 'flex', width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 9999 }}>
+                  <Menu style={{ width: 18, height: 18 }} />
+                  {commentCount > 0 && (
+                    <div style={{
+                      position: 'absolute',
+                      right: 2,
+                      top: 2,
+                      width: 6,
+                      height: 6,
+                      borderRadius: 9999,
+                      border: '1.7px solid #000',
+                      background: '#0ea5e9',
+                      animation: badgeAnim ? 'fw-badge-pop 0.4s ease' : 'none',
+                    }} />
+                  )}
+                </div>
+                <span style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0 }}>Menu</span>
+              </VtooltipTrigger>
+              <VtooltipContent>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap', padding: '0 8px', fontSize: 14, fontWeight: 500, lineHeight: 1.2, letterSpacing: '-0.01em', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+                  Menu
+                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                    <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 3, border: '1px solid rgba(255,255,255,0.3)', padding: 2, fontSize: 12, color: '#fff' }}>
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" /></svg>
+                    </span>
+                    <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 3, border: '1px solid rgba(255,255,255,0.3)', padding: 2, fontSize: 12, color: '#fff' }}>K</span>
+                  </span>
+                </div>
+              </VtooltipContent>
+            </VtooltipItem>
+          </div>
+        </VtooltipRoot>
       </div>
-      )}
 
       {/* Keyframes */}
       <style>{`
@@ -790,6 +960,19 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           0% { opacity: 0; transform: translateY(-12px); }
           50% { background: #1e3a1e; }
           100% { opacity: 1; transform: translateY(0); }
+        }
+        [data-fw] button:focus,
+        [data-fw] button:focus-visible {
+          outline: none;
+          box-shadow: none;
+        }
+        @keyframes fw-pin-drop {
+          0% { transform: translateY(-20px); opacity: 0; }
+          60% { transform: translateY(4px); opacity: 1; }
+          100% { transform: translateY(0); opacity: 1; }
+        }
+        .fw-pill-icon:hover {
+          background: rgba(255, 255, 255, 0.15);
         }
         .fw-highlight {
           outline: 2px solid #3b82f6 !important;
