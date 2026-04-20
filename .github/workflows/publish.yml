@@ -27,7 +27,7 @@ jobs:
       - name: Pack tarball
         id: pack
         run: |
-          TARBALL=$(bun pm pack | tail -1)
+          TARBALL=$(bun pm pack --quiet)
           echo "path=$(pwd)/$TARBALL" >> "$GITHUB_OUTPUT"
       - name: Build consumer app against React ${{ matrix.react }}
         env:
