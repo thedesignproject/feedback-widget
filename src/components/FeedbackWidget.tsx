@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MessageCircle, LogOut, Menu, X } from 'lucide-react'
 import { VtooltipRoot, VtooltipItem, VtooltipTrigger, VtooltipContent } from './VTooltipMenu'
 import { getSelector } from '../lib/getSelector'
@@ -31,6 +31,13 @@ interface Comment {
 
 const WIDGET_ATTR = 'data-fw'
 
+const AVATAR_COLORS = ['#8b5cf6', '#f97316', '#3b82f6', '#ec4899', '#14b8a6', '#f43f5e', '#6366f1', '#84cc16']
+function avatarColor(id: string) {
+  let hash = 0
+  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0
+  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
+}
+
 function timeAgo(date: string): string {
   const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000)
   if (seconds < 5) return 'just now'
@@ -48,9 +55,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [target, setTarget] = useState<ClickTarget | null>(null)
   const [comment, setComment] = useState('')
   const [sending, setSending] = useState(false)
-  const [showSuccess, setShowSuccess] = useState(false)
   const [hovered, setHovered] = useState<Element | null>(null)
-  const [btnHover, setBtnHover] = useState(false)
 
   // Draggable pill state
   const [pillPos, setPillPos] = useState({ x: window.innerWidth - 72, y: window.innerHeight - 200 })
@@ -61,11 +66,16 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
   // Pin state
   const [selectedPin, setSelectedPin] = useState<string | null>(null)
+  const [hoveredPin, setHoveredPin] = useState<string | null>(null)
+
+  // Inline edit state
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editText, setEditText] = useState('')
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
 
   // Sidebar state
   const [comments, setComments] = useState<Comment[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [newCommentIds, setNewCommentIds] = useState<Set<string>>(new Set())
   const [badgeAnim, setBadgeAnim] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
@@ -90,7 +100,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     fetchComments()
   }, [projectId, apiBase])
 
-  // --- Set crosshair cursor on body when selecting ---
+  // --- Set crosshair cursor when selecting ---
   useEffect(() => {
     if (mode !== 'selecting') return
     const prev = document.body.style.cursor
@@ -208,18 +218,9 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       }
 
       setComments((prev) => [newComment, ...prev])
-      setNewCommentIds((prev) => new Set(prev).add(newComment.id))
 
       setBadgeAnim(true)
       setTimeout(() => setBadgeAnim(false), 400)
-
-      setTimeout(() => {
-        setNewCommentIds((prev) => {
-          const next = new Set(prev)
-          next.delete(newComment.id)
-          return next
-        })
-      }, 2000)
 
       setTarget(null)
       setComment('')
@@ -247,6 +248,8 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           setComment('')
           setSending(false)
           setMode('selecting')
+        } else if (mode === 'selecting') {
+          exitFeedbackMode()
         } else if (sidebarOpen) {
           setSidebarOpen(false)
         }
@@ -272,21 +275,11 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [mode, handleSend, sidebarOpen])
 
-  function reset() {
-    setMode('idle')
-    setTarget(null)
-    setComment('')
-    setSending(false)
-    setShowSuccess(false)
-    setHovered(null)
-  }
-
   function exitFeedbackMode() {
     setMode('idle')
     setTarget(null)
     setComment('')
     setSending(false)
-    setShowSuccess(false)
     setHovered(null)
     setSelectedPin(null)
   }
@@ -321,19 +314,36 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
     }
-  }, [pillPos])
+  }, [])
 
-  function handleEyeClick() {
-    if (mode !== 'idle') {
-      // In feedback mode — exit it, keep sidebar open
-      exitFeedbackMode()
-    } else if (comments.length > 0) {
-      // Has comments, not in feedback mode — toggle sidebar
-      setSidebarOpen((v) => !v)
-    } else {
-      // No comments — enter feedback mode
-      setMode('selecting')
+  async function patchComment(id: string, updates: Record<string, string>) {
+    try {
+      await fetch(`${apiBase}/comments`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, ...updates }),
+      })
+    } catch (err) {
+      console.warn('[FeedbackWidget] PATCH failed:', err)
     }
+  }
+
+  function updateStatus(commentId: string, status: 'approved' | 'rejected') {
+    setComments((prev) => prev.map((c) => c.id === commentId ? { ...c, status } : c))
+    patchComment(commentId, { status })
+  }
+
+  function deleteComment(commentId: string) {
+    setComments((prev) => prev.filter((c) => c.id !== commentId))
+    fetch(`${apiBase}/comments?id=${commentId}`, { method: 'DELETE' }).catch(() => {})
+  }
+
+  function saveEdit(commentId: string) {
+    if (!editText.trim()) return
+    const text = editText.trim()
+    setComments((prev) => prev.map((c) => c.id === commentId ? { ...c, comment: text } : c))
+    setEditingId(null)
+    patchComment(commentId, { comment: text })
   }
 
   // --- Highlight element from comment ---
@@ -390,13 +400,15 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     }
   }
 
-  const statusColors: Record<string, { bg: string; text: string; label: string }> = {
-    pending: { bg: '#fef3c7', text: '#92400e', label: 'Pending' },
-    approved: { bg: '#d1fae5', text: '#065f46', label: 'Approved' },
-    rejected: { bg: '#fee2e2', text: '#991b1b', label: 'Rejected' },
-  }
-
-  const commentCount = comments.length
+  const cutoff = new Date('2026-04-19T00:00:00Z')
+  const visibleComments = useMemo(() => comments.filter((c) => new Date(c.created_at) >= cutoff), [comments])
+  const sortedComments = useMemo(() => [...visibleComments].sort((a, b) => {
+    const aResolved = a.status === 'approved' || a.status === 'rejected'
+    const bResolved = b.status === 'approved' || b.status === 'rejected'
+    if (aResolved !== bResolved) return aResolved ? 1 : -1
+    return 0
+  }), [visibleComments])
+  const commentCount = visibleComments.length
 
   return (
     <div {...{ [WIDGET_ATTR]: '' }}>
@@ -412,6 +424,59 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             background: 'transparent',
           }}
         />
+      )}
+
+      {/* Instruction tooltip */}
+      {mode === 'selecting' && (
+        <div
+          {...{ [WIDGET_ATTR]: '' }}
+          style={{
+            position: 'fixed',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 2147483647,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '8px 14px',
+            borderRadius: 9999,
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            fontSize: 13,
+            color: '#111',
+            whiteSpace: 'nowrap',
+            animation: 'fw-instruction-in 0.3s ease both',
+          }}
+        >
+          <span className="fw-rec-dot" style={{ width: 8, height: 8, borderRadius: '50%', background: '#E5502A', flexShrink: 0 }} />
+          <span style={{ fontWeight: 500 }}>Click any element to leave feedback</span>
+          <span style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1px 6px',
+            borderRadius: 4,
+            border: '1px solid #d1d5db',
+            fontSize: 11,
+            fontWeight: 600,
+            color: '#888',
+            lineHeight: 1.4,
+          }}>Esc</span>
+          <span
+            onClick={exitFeedbackMode}
+            style={{
+              color: '#999',
+              fontSize: 12,
+              cursor: 'pointer',
+              marginLeft: 2,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = '#111')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = '#999')}
+          >exit</span>
+        </div>
       )}
 
       {/* Popover */}
@@ -437,64 +502,142 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             {...{ [WIDGET_ATTR]: '' }}
             style={{
               ...popoverStyle(),
-              width: 300,
-              background: '#fff',
-              borderRadius: 10,
-              boxShadow: '0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08)',
-              padding: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              width: comment.length > 0 ? 300 : 'auto',
+              background: '#1e1e1e',
+              borderRadius: comment.length > 0 ? 14 : 9999,
+              padding: comment.length > 0 ? '10px 10px 6px' : '6px 6px 6px 10px',
               fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+              transition: 'border-radius 0.2s, width 0.2s, padding 0.2s',
             }}
           >
-            <textarea
-              ref={textareaRef}
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-              placeholder="What would you change?"
-              rows={3}
-              style={{
-                width: '100%',
-                border: '1px solid #e0e0e0',
-                borderRadius: 6,
-                padding: '8px 10px',
-                fontSize: 14,
-                fontFamily: 'inherit',
-                resize: 'vertical',
-                outline: 'none',
-                boxSizing: 'border-box',
-                transition: 'border-color 0.15s',
-              }}
-              onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
-              onBlur={(e) => (e.target.style.borderColor = '#e0e0e0')}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
-              <button
-                onClick={handleSend}
-                disabled={!comment.trim() || sending}
-                style={{
-                  padding: '6px 16px',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: '#fff',
-                  background: !comment.trim() || sending ? '#a0a0a0' : '#111',
-                  border: 'none',
-                  borderRadius: 6,
-                  cursor: !comment.trim() || sending ? 'default' : 'pointer',
-                  transition: 'background 0.15s',
+            {/* Top row: avatar + input + send */}
+            <div style={{ display: 'flex', alignItems: comment.length > 0 ? 'flex-start' : 'center', gap: 10 }}>
+              {/* Avatar */}
+              <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#3b82f6', flexShrink: 0, marginTop: comment.length > 0 ? 2 : 0 }} />
+              {/* Textarea (single row when empty, expands when typing) */}
+              <textarea
+                ref={textareaRef}
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSend() }
+                  if (e.key === 'Enter' && !e.shiftKey && comment.length === 0) { e.preventDefault() }
                 }}
-              >
-                {sending ? 'Sending\u2026' : 'Send \u2192'}
-              </button>
+                placeholder="Add a comment"
+                rows={comment.length > 0 ? 3 : 1}
+                style={{
+                  flex: 1,
+                  background: 'none',
+                  border: 'none',
+                  outline: 'none',
+                  color: '#fff',
+                  fontSize: 14,
+                  fontFamily: 'inherit',
+                  minWidth: 0,
+                  resize: 'none',
+                  lineHeight: 1.5,
+                  padding: 0,
+                  transition: 'height 0.15s ease',
+                }}
+              />
+              {/* Send button (inline when collapsed) */}
+              {comment.length === 0 && (
+                <button
+                  onClick={handleSend}
+                  disabled
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    border: 'none',
+                    background: '#333',
+                    cursor: 'default',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                    <polyline points="12 5 19 12 12 19" />
+                  </svg>
+                </button>
+              )}
             </div>
-            <div
-              style={{
-                marginTop: 8,
-                fontSize: 11,
-                color: '#999',
-                textAlign: 'right',
-              }}
-            >
-              \u2318+Enter to send \u00b7 Esc to cancel
-            </div>
+
+            {/* Bottom toolbar (visible when typing) */}
+            {comment.length > 0 && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginTop: 6,
+                paddingTop: 6,
+                borderTop: '1px solid #333',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {/* Emoji */}
+                  <button style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', borderRadius: 6, color: '#888' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M8 14s1.5 2 4 2 4-2 4-2" />
+                      <line x1="9" y1="9" x2="9.01" y2="9" />
+                      <line x1="15" y1="9" x2="15.01" y2="9" />
+                    </svg>
+                  </button>
+                  {/* Mention */}
+                  <button style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', borderRadius: 6, color: '#888' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="4" />
+                      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
+                    </svg>
+                  </button>
+                  {/* Image attachment */}
+                  <button style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', borderRadius: 6, color: '#888' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                      <circle cx="8.5" cy="8.5" r="1.5" />
+                      <polyline points="21 15 16 10 5 21" />
+                    </svg>
+                  </button>
+                </div>
+                {/* Send button */}
+                <button
+                  onClick={handleSend}
+                  disabled={!comment.trim() || sending}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: '50%',
+                    border: 'none',
+                    background: !comment.trim() || sending ? '#333' : '#3b82f6',
+                    cursor: !comment.trim() || sending ? 'default' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    transition: 'background 0.2s',
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={!comment.trim() || sending ? '#666' : '#fff'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                    <polyline points="12 5 19 12 12 19" />
+                  </svg>
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -505,26 +648,30 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           {...{ [WIDGET_ATTR]: '' }}
           style={{
             position: 'absolute',
-            left: target.x - 12,
-            top: target.y - 32,
+            left: target.x - 16,
+            top: target.y - 40,
             zIndex: 2147483646,
             pointerEvents: 'none',
           }}
         >
-          <svg width="24" height="32" viewBox="0 0 24 32" fill="none">
-            <path d="M12 0C5.373 0 0 5.373 0 12c0 9 12 20 12 20s12-11 12-20C24 5.373 18.627 0 12 0z" fill="#111" />
-            <circle cx="12" cy="12" r="8" fill="#111" />
-            <text x="12" y="16" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="700" fontFamily="-apple-system, BlinkMacSystemFont, sans-serif">
-              {comments.length + 1}
+          <svg width="32" height="40" viewBox="0 0 32 40" fill="none">
+            <path d="M16 38c0 0-14-12.5-14-22a14 14 0 1 1 28 0c0 9.5-14 22-14 22z" fill="#F5F0DC" stroke="#222" strokeWidth="2" />
+            <text x="16" y="19.5" textAnchor="middle" fill="#111" fontSize="11" fontWeight="700" fontFamily="-apple-system, BlinkMacSystemFont, sans-serif">
+              U
             </text>
           </svg>
         </div>
       )}
 
       {/* Persisted comment pins */}
-      {comments.map((c, i) => {
-        const pinNumber = comments.length - i
+      {visibleComments.map((c, i) => {
+        const pinNumber = visibleComments.length - i
         const isSelected = selectedPin === c.id
+        const isHovered = hoveredPin === c.id && !isSelected
+        const statusDotColor = c.status === 'approved' ? '#22c55e' : c.status === 'rejected' ? '#ef4444' : '#111'
+        const truncated = c.comment.length > 60 ? c.comment.slice(0, 60) + '\u2026' : c.comment
+        const pinColor = isSelected ? '#3b82f6' : '#f5f5f5'
+        const initial = (c.comment[0] || 'U').toUpperCase()
         return (
           <div key={c.id} {...{ [WIDGET_ATTR]: '' }}>
             {/* Pin marker */}
@@ -533,80 +680,168 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                 e.stopPropagation()
                 setSelectedPin(isSelected ? null : c.id)
               }}
+              onMouseEnter={() => setHoveredPin(c.id)}
+              onMouseLeave={() => setHoveredPin(null)}
               style={{
                 position: 'absolute',
-                left: c.x - 12,
-                top: c.y - 32,
-                zIndex: isSelected ? 2147483646 : 2147483640,
+                left: c.x - 16,
+                top: c.y - 40,
+                zIndex: isSelected ? 2147483646 : isHovered ? 2147483642 : 2147483640,
                 cursor: 'pointer',
                 transition: 'transform 0.15s',
-                transform: isSelected ? 'scale(1.15)' : 'scale(1)',
+                transform: isSelected || isHovered ? 'scale(1.15)' : 'scale(1)',
               }}
             >
-              <svg width="24" height="32" viewBox="0 0 24 32" fill="none">
-                <path d="M12 0C5.373 0 0 5.373 0 12c0 9 12 20 12 20s12-11 12-20C24 5.373 18.627 0 12 0z" fill={isSelected ? '#3b82f6' : '#111'} />
-                <circle cx="12" cy="12" r="8" fill={isSelected ? '#3b82f6' : '#111'} />
-                <text x="12" y="16" textAnchor="middle" fill="#fff" fontSize="11" fontWeight="700" fontFamily="-apple-system, BlinkMacSystemFont, sans-serif">
-                  {pinNumber}
+              <svg width="32" height="40" viewBox="0 0 32 40" fill="none">
+                <path d="M16 38c0 0-14-12.5-14-22a14 14 0 1 1 28 0c0 9.5-14 22-14 22z" fill={isSelected ? '#3b82f6' : '#F5F0DC'} stroke={isSelected ? '#2563eb' : '#222'} strokeWidth="2" />
+                <text x="16" y="19.5" textAnchor="middle" fill={isSelected ? '#fff' : '#111'} fontSize="11" fontWeight="700" fontFamily="-apple-system, BlinkMacSystemFont, sans-serif">
+                  {initial}
                 </text>
               </svg>
             </div>
 
-            {/* Pin detail popover */}
-            {isSelected && (
-              <>
-                <div
-                  onClick={() => setSelectedPin(null)}
-                  style={{ position: 'fixed', inset: 0, zIndex: 2147483645 }}
-                />
-                <div
-                  style={{
-                    ...pinPopoverStyle(c),
-                    width: 280,
-                    background: '#fff',
-                    borderRadius: 10,
-                    boxShadow: '0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08)',
-                    padding: 14,
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <span style={{ fontSize: 11, fontWeight: 600, color: '#666' }}>
-                      #{pinNumber} &middot; {timeAgo(c.created_at)}
-                    </span>
-                    <span style={{
-                      fontSize: 11,
-                      fontWeight: 600,
-                      padding: '2px 8px',
-                      borderRadius: 9999,
-                      background: (statusColors[c.status] || statusColors.pending).bg,
-                      color: (statusColors[c.status] || statusColors.pending).text,
-                    }}>
-                      {(statusColors[c.status] || statusColors.pending).label}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 14, lineHeight: 1.5, color: '#111' }}>
-                    {c.comment}
-                  </div>
-                  <div style={{
-                    marginTop: 8,
-                    fontSize: 11,
-                    color: '#999',
-                    fontFamily: '"SF Mono", "Fira Code", Menlo, monospace',
+            {/* Hover tooltip */}
+            {isHovered && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: c.x - 16,
+                  top: c.y - 78,
+                  zIndex: 2147483643,
+                  pointerEvents: 'none',
+                  animation: 'fw-tooltip-in 0.15s ease both',
+                }}
+              >
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  background: '#1e1e1e',
+                  borderRadius: 8,
+                  padding: '6px 10px',
+                  maxWidth: 240,
+                  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+                }}>
+                  <span style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: statusDotColor,
+                    flexShrink: 0,
+                  }} />
+                  <span style={{
+                    fontSize: 12,
+                    color: '#fff',
+                    lineHeight: 1.3,
+                    whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
                   }}>
-                    {c.element}
-                  </div>
+                    {truncated}
+                  </span>
                 </div>
-              </>
+              </div>
             )}
+
+            {/* Pin detail popover */}
+            {isSelected && (() => {
+              const avColor = avatarColor(c.id)
+              const initial = (c.comment[0] || 'U').toUpperCase()
+              const stBadge = c.status === 'approved'
+                ? { bg: '#ecfdf5', color: '#059669', label: 'Approved' }
+                : c.status === 'rejected'
+                  ? { bg: '#fef2f2', color: '#dc2626', label: 'Rejected' }
+                  : { bg: '#fffbeb', color: '#d97706', label: 'Pending' }
+              const selectorShort = c.element.split('>').pop()?.trim() || c.element
+              return (
+                <>
+                  <div
+                    onClick={() => setSelectedPin(null)}
+                    style={{ position: 'fixed', inset: 0, zIndex: 2147483645 }}
+                  />
+                  <div
+                    style={{
+                      ...pinPopoverStyle(c),
+                      width: 300,
+                      background: '#fff',
+                      borderRadius: 16,
+                      boxShadow: '0 12px 40px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)',
+                      padding: 16,
+                      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+                      animation: 'fw-tooltip-in 0.15s ease both',
+                    }}
+                  >
+                    {/* Header */}
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 12 }}>
+                      {/* Avatar */}
+                      <div style={{
+                        width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+                        background: avColor,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: '#fff', fontSize: 13, fontWeight: 700,
+                      }}>
+                        {initial}
+                      </div>
+                      {/* Name + meta */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#111', marginBottom: 2 }}>User</div>
+                        <div style={{ fontSize: 11, color: '#aaa' }}>
+                          #{pinNumber} &middot; {timeAgo(c.created_at)}
+                        </div>
+                      </div>
+                      {/* Status badge */}
+                      <span style={{
+                        fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 9999,
+                        background: stBadge.bg, color: stBadge.color, flexShrink: 0, marginTop: 2,
+                      }}>
+                        {stBadge.label}
+                      </span>
+                    </div>
+
+                    {/* Comment text */}
+                    <div style={{ fontSize: 14, lineHeight: 1.6, color: '#333', marginBottom: 14 }}>
+                      {c.comment}
+                    </div>
+
+                    {/* Element chip */}
+                    <div style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      fontSize: 11, color: '#999', background: '#f5f5f5',
+                      padding: '4px 10px', borderRadius: 6,
+                      maxWidth: '100%', overflow: 'hidden',
+                    }}>
+                      {/* Grid icon */}
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#bbb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="7" height="7" />
+                        <rect x="14" y="3" width="7" height="7" />
+                        <rect x="3" y="14" width="7" height="7" />
+                        <rect x="14" y="14" width="7" height="7" />
+                      </svg>
+                      <span style={{
+                        fontFamily: '"SF Mono", "Fira Code", Menlo, monospace',
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>
+                        {selectorShort}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )
+            })()}
           </div>
         )
       })}
 
-      {/* Sidebar */}
+      {/* Sidebar overlay — click outside to close */}
+      {sidebarOpen && (
+        <div
+          {...{ [WIDGET_ATTR]: '' }}
+          onClick={() => setSidebarOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+        />
+      )}
+
+      {/* Reviewer Sidebar */}
       <div
         {...{ [WIDGET_ATTR]: '' }}
         style={{
@@ -614,58 +849,32 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           top: 0,
           right: 0,
           bottom: 0,
-          width: 320,
+          width: 340,
           zIndex: 9999,
-          background: '#111',
-          borderLeft: '1px solid #222',
+          background: '#1a1a1a',
           transform: sidebarOpen ? 'translateX(0)' : 'translateX(100%)',
           transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
           display: 'flex',
           flexDirection: 'column',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          boxShadow: sidebarOpen ? '-8px 0 32px rgba(0,0,0,0.3)' : 'none',
         }}
       >
-        {/* Sidebar header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '16px 16px 12px',
-            borderBottom: '1px solid #222',
-          }}
-        >
-          {/* Small eye icon */}
-          <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
-            <circle cx="16" cy="16" r="13" stroke="#fff" strokeWidth="1.5" fill="none" />
-            <circle cx="16" cy="16" r="6" fill="#fff" />
-            <circle cx="16" cy="16" r="3" fill="#111" />
-            <circle cx="18.5" cy="13.5" r="1.2" fill="#fff" />
-          </svg>
-          <span style={{ color: '#fff', fontSize: 14, fontWeight: 600, flex: 1 }}>
-            Feedback
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', padding: '14px 16px', borderBottom: '1px solid #2a2a2a' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#fff', flex: 1 }}>
+            Comments
           </span>
-          <span style={{ color: '#555', fontSize: 12 }}>
-            {commentCount} comment{commentCount !== 1 ? 's' : ''}
+          <span style={{ fontSize: 11, color: '#666', marginRight: 10 }}>
+            {commentCount}
           </span>
           <button
             onClick={() => setSidebarOpen(false)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#666',
-              cursor: 'pointer',
-              padding: 4,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: 4,
-              transition: 'color 0.15s',
-            }}
+            style={{ background: 'none', border: 'none', color: '#555', cursor: 'pointer', padding: 4, display: 'flex' }}
             onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#666')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = '#555')}
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
               <line x1="4" y1="4" x2="12" y2="12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
               <line x1="12" y1="4" x2="4" y2="12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
@@ -673,159 +882,215 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         </div>
 
         {/* Comment list */}
-        <div
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: 12,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-          }}
-        >
-          {comments.length === 0 && (
-            <div style={{ color: '#444', fontSize: 13, textAlign: 'center', marginTop: 40 }}>
+        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+          {visibleComments.length === 0 && (
+            <div style={{ color: '#555', fontSize: 13, textAlign: 'center', marginTop: 40 }}>
               No comments yet
             </div>
           )}
-          {comments.map((c, i) => {
-            const isNew = newCommentIds.has(c.id)
-            return (
-              <div
-                key={c.id}
-                onClick={() => highlightElement(c.element)}
-                style={{
-                  background: isNew ? '#1e2a1e' : '#1a1a1a',
-                  borderRadius: 8,
-                  padding: 12,
-                  borderLeft: '2px solid #3b82f6',
-                  cursor: 'pointer',
-                  animation: sidebarOpen
-                    ? isNew
-                      ? 'fw-slide-in-new 0.3s ease both'
-                      : `fw-slide-in 0.3s ease ${i * 0.08}s both`
-                    : 'none',
-                  transition: 'background 0.15s',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isNew) e.currentTarget.style.background = '#222'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = isNew ? '#1e2a1e' : '#1a1a1a'
-                }}
-              >
-                <div style={{ color: '#fff', fontSize: 14, lineHeight: 1.4, marginBottom: 8 }}>
-                  {c.comment}
-                </div>
+          {sortedComments.map((c, i) => {
+              const pinNum = visibleComments.length - visibleComments.indexOf(c)
+              const isResolved = c.status === 'approved' || c.status === 'rejected'
+              const isPending = !c.status || c.status === 'pending'
+              const isEditing = editingId === c.id
+              const initial = (c.comment[0] || 'U').toUpperCase()
+              const isMenuOpen = menuOpenId === c.id
+              return (
                 <div
+                  key={c.id}
+                  className="fw-sidebar-card"
+                  onClick={() => { if (!isEditing && !isMenuOpen) { setSelectedPin(c.id); highlightElement(c.element) } }}
                   style={{
-                    fontFamily: '"SF Mono", "Fira Code", "Fira Mono", Menlo, monospace',
-                    color: '#666',
-                    fontSize: 11,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    marginBottom: 2,
-                  }}
-                >
-                  {c.element}
-                </div>
-                <div
-                  style={{
+                    padding: '12px 16px',
+                    cursor: isEditing ? 'default' : 'pointer',
+                    position: 'relative',
+                    zIndex: isMenuOpen ? 100000 : 'auto',
                     display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
+                    gap: 10,
+                    borderBottom: '1px solid #2a2a2a',
+                    opacity: isResolved ? 0.5 : 1,
+                    transition: 'background 0.1s, opacity 0.2s',
+                    animation: sidebarOpen ? `fw-slide-in 0.2s ease ${i * 0.04}s both` : 'none',
                   }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#222' }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
                 >
-                  <span
-                    style={{
-                      color: '#666',
-                      fontSize: 11,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      maxWidth: '60%',
-                    }}
-                  >
-                    {c.url.replace(/^https?:\/\//, '')}
-                  </span>
-                  <span style={{ color: '#444', fontSize: 11, flexShrink: 0 }}>
-                    {timeAgo(c.created_at)}
-                  </span>
+                  {/* Avatar */}
+                  <div style={{
+                    width: 28, height: 28, borderRadius: '50%', flexShrink: 0, marginTop: 1,
+                    background: isResolved ? '#333' : '#3b82f6',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontSize: 12, fontWeight: 700,
+                  }}>
+                    {initial}
+                  </div>
+
+                  {/* Content */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {/* Meta line */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                      <span style={{ fontSize: 11, color: '#888' }}>#{pinNum}</span>
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M2 4h4M4.5 2L6.5 4L4.5 6" stroke="#555" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                      <span style={{ fontSize: 11, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '') || '/'}
+                      </span>
+                    </div>
+
+                    {/* Author + time */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#ddd' }}>User</span>
+                      <span style={{ fontSize: 11, color: '#555' }}>{timeAgo(c.created_at)}</span>
+                    </div>
+
+                    {/* Comment text */}
+                    {isEditing ? (
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <textarea
+                          autoFocus
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEdit(c.id) }
+                            if (e.key === 'Escape') { setEditingId(null) }
+                          }}
+                          rows={2}
+                          style={{
+                            width: '100%', boxSizing: 'border-box',
+                            fontSize: 13, lineHeight: 1.4, color: '#fff',
+                            border: '1px solid #444', borderRadius: 5,
+                            padding: '6px 8px', fontFamily: 'inherit',
+                            outline: 'none', resize: 'none', background: '#2a2a2a',
+                          }}
+                          onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
+                          onBlur={(e) => (e.target.style.borderColor = '#444')}
+                        />
+                        <div style={{ display: 'flex', gap: 6, marginTop: 4, justifyContent: 'flex-end' }}>
+                          <button onClick={() => setEditingId(null)} style={{ fontSize: 11, color: '#666', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}>Cancel</button>
+                          <button onClick={() => saveEdit(c.id)} style={{ fontSize: 11, color: '#3b82f6', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer', padding: '2px 6px' }}>Save</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        onClick={(e) => { e.stopPropagation(); setEditingId(c.id); setEditText(c.comment) }}
+                        style={{ fontSize: 13, lineHeight: 1.4, color: '#ccc', cursor: 'text' }}
+                      >
+                        {c.comment}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Top-right area: hover actions + blue dot */}
+                  <div style={{
+                    position: 'absolute', top: 10, right: 12,
+                    display: 'flex', alignItems: 'center', gap: 6,
+                  }}>
+                    <div className="fw-card-actions" style={{
+                      display: 'none', alignItems: 'center', gap: 2,
+                    }}>
+                      {isPending && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); updateStatus(c.id, 'approved') }}
+                          title="Mark as resolved"
+                          style={{
+                            width: 22, height: 22, borderRadius: '50%', border: '1.5px solid #555',
+                            background: 'transparent', cursor: 'pointer', display: 'flex',
+                            alignItems: 'center', justifyContent: 'center', color: '#888', padding: 0,
+                            transition: 'all 0.15s',
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#22c55e'; e.currentTarget.style.color = '#22c55e' }}
+                          onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#555'; e.currentTarget.style.color = '#888' }}
+                        >
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setMenuOpenId(isMenuOpen ? null : c.id) }}
+                        title="More"
+                        style={{
+                          width: 24, height: 24, borderRadius: 4, border: 'none',
+                          background: isMenuOpen ? '#333' : 'transparent', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: '#888', padding: 0,
+                        }}
+                        onMouseEnter={(e) => { if (!isMenuOpen) e.currentTarget.style.background = '#333' }}
+                        onMouseLeave={(e) => { if (!isMenuOpen) e.currentTarget.style.background = 'transparent' }}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></svg>
+                      </button>
+                    </div>
+                    {isPending && !isEditing && (
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6', flexShrink: 0 }} />
+                    )}
+                  </div>
+
+                  {/* Dropdown menu */}
+                  {isMenuOpen && (
+                    <>
+                    <div
+                      onClick={(e) => { e.stopPropagation(); setMenuOpenId(null) }}
+                      style={{ position: 'fixed', inset: 0, zIndex: 99998 }}
+                    />
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: 'absolute', top: 34, right: 12, zIndex: 99999,
+                        background: '#2a2a2a', border: '1px solid #3a3a3a', borderRadius: 8,
+                        padding: '4px 0', minWidth: 160,
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                        animation: 'fw-tooltip-in 0.1s ease both',
+                      }}
+                    >
+                      <button
+                        onClick={() => { updateStatus(c.id, c.status === 'approved' ? 'pending' as any : 'approved'); setMenuOpenId(null) }}
+                        style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#ccc', fontSize: 12, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#333')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                        {c.status === 'approved' ? 'Unresolve' : 'Mark as resolved'}
+                      </button>
+                      <button
+                        onClick={() => { setEditingId(c.id); setEditText(c.comment); setMenuOpenId(null) }}
+                        style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#ccc', fontSize: 12, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#333')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                        Edit
+                      </button>
+                      <div style={{ height: 1, background: '#3a3a3a', margin: '4px 0' }} />
+                      <button
+                        onClick={() => { deleteComment(c.id); setMenuOpenId(null) }}
+                        style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#ef4444', fontSize: 12, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#333')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" /></svg>
+                        Delete
+                      </button>
+                    </div>
+                    </>
+                  )}
                 </div>
-              </div>
-            )
-          })}
+              )
+            })}
         </div>
 
-        {/* Leave feedback button */}
-        <div style={{ padding: 12, borderTop: '1px solid #222' }}>
-          {mode !== 'idle' ? (
-            <button
-              onClick={() => {
-                exitFeedbackMode()
-                setSidebarOpen(false)
-              }}
-              style={{
-                width: '100%',
-                padding: '10px 0',
-                fontSize: 13,
-                fontWeight: 600,
-                color: '#fff',
-                background: '#22c55e',
-                border: 'none',
-                borderRadius: 8,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                transition: 'background 0.15s',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#16a34a')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = '#22c55e')}
-            >
-              <svg width="14" height="14" viewBox="0 0 28 28" fill="none">
-                <path
-                  d="M5 14.5L11 20.5L23 8.5"
-                  stroke="#fff"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              Done
-            </button>
-          ) : (
-            <button
-              onClick={enterFeedbackMode}
-              style={{
-                width: '100%',
-                padding: '10px 0',
-                fontSize: 13,
-                fontWeight: 600,
-                color: '#fff',
-                background: '#3b82f6',
-                border: 'none',
-                borderRadius: 8,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                transition: 'background 0.15s',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = '#2563eb')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = '#3b82f6')}
-            >
-              <svg width="14" height="14" viewBox="0 0 32 32" fill="none">
-                <circle cx="16" cy="16" r="13" stroke="#fff" strokeWidth="2" fill="none" />
-                <circle cx="16" cy="16" r="6" fill="#fff" />
-                <circle cx="16" cy="16" r="3" fill="#3b82f6" />
-              </svg>
-              Leave feedback
-            </button>
-          )}
+        {/* Footer */}
+        <div style={{ padding: '12px 16px', borderTop: '1px solid #2a2a2a' }}>
+          <button
+            onClick={() => { enterFeedbackMode(); setSidebarOpen(false) }}
+            style={{
+              width: '100%', padding: '9px 0', fontSize: 15, fontWeight: 500,
+              color: '#fff', background: '#3b82f6', border: 'none', borderRadius: 8,
+              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              gap: 6, transition: 'background 0.15s',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = '#2563eb')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = '#3b82f6')}
+          >
+            + New feedback
+          </button>
         </div>
       </div>
 
@@ -866,7 +1131,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                   if (mode !== 'idle') { exitFeedbackMode() } else { enterFeedbackMode() }
                 }}
               >
-                <div className="fw-pill-icon" style={{ position: 'relative', display: 'flex', width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 9999, background: mode !== 'idle' ? 'rgba(255,255,255,0.1)' : 'transparent' }}>
+                <div className="fw-pill-icon" style={{ position: 'relative', display: 'flex', width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 9999, background: mode !== 'idle' ? '#333333' : 'transparent' }}>
                   {mode !== 'idle' ? (
                     <X style={{ width: 18, height: 18 }} />
                   ) : (
@@ -899,6 +1164,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               <VtooltipContent>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap', padding: '0 8px', fontSize: 14, fontWeight: 500, lineHeight: 1.2, letterSpacing: '-0.01em', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
                   Share
+                  <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 3, border: '1px solid rgba(255,255,255,0.3)', padding: 2, fontSize: 12, color: '#fff' }}>S</span>
                 </div>
               </VtooltipContent>
             </VtooltipItem>
@@ -931,13 +1197,8 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               </VtooltipTrigger>
               <VtooltipContent>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap', padding: '0 8px', fontSize: 14, fontWeight: 500, lineHeight: 1.2, letterSpacing: '-0.01em', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
-                  Menu
-                  <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                    <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 3, border: '1px solid rgba(255,255,255,0.3)', padding: 2, fontSize: 12, color: '#fff' }}>
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M15 6v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3" /></svg>
-                    </span>
-                    <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 3, border: '1px solid rgba(255,255,255,0.3)', padding: 2, fontSize: 12, color: '#fff' }}>K</span>
-                  </span>
+                  Feedback
+                  <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 3, border: '1px solid rgba(255,255,255,0.3)', padding: 2, fontSize: 12, color: '#fff' }}>F</span>
                 </div>
               </VtooltipContent>
             </VtooltipItem>
@@ -966,10 +1227,28 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           outline: none;
           box-shadow: none;
         }
+        @keyframes fw-instruction-in {
+          0% { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+          100% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+        .fw-rec-dot {
+          animation: fw-rec-pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes fw-rec-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+        @keyframes fw-tooltip-in {
+          0% { opacity: 0; transform: translateY(4px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
         @keyframes fw-pin-drop {
           0% { transform: translateY(-20px); opacity: 0; }
           60% { transform: translateY(4px); opacity: 1; }
           100% { transform: translateY(0); opacity: 1; }
+        }
+        .fw-sidebar-card:hover .fw-card-actions {
+          display: flex !important;
         }
         .fw-pill-icon:hover {
           background: rgba(255, 255, 255, 0.15);

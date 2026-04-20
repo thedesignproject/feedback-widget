@@ -17,6 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'GET') return handleGet(req, res, supabase)
   if (req.method === 'POST') return handlePost(req, res, supabase)
+  if (req.method === 'PATCH') return handlePatch(req, res, supabase)
   if (req.method === 'DELETE') return handleDelete(req, res, supabase)
 
   return res.status(405).json({ error: 'Method not allowed' })
@@ -31,7 +32,7 @@ async function handleGet(req: VercelRequest, res: VercelResponse, supabase: Supa
 
   const { data, error } = await supabase
     .from('comments')
-    .select('id, project_id, url, x, y, element, comment, created_at')
+    .select('id, project_id, url, x, y, element, comment, status, created_at')
     .eq('project_id', projectId)
     .order('created_at', { ascending: false })
 
@@ -42,23 +43,59 @@ async function handleGet(req: VercelRequest, res: VercelResponse, supabase: Supa
   return res.status(200).json(data ?? [])
 }
 
-async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
-  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+async function handlePatch(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
+  const { id, status, comment } = req.body ?? {}
 
-  if (!projectId) {
-    return res.status(400).json({ error: 'Missing required query param: projectId' })
+  if (!id) {
+    return res.status(400).json({ error: 'Missing required field: id' })
+  }
+
+  const updates: Record<string, string> = {}
+
+  if (status) {
+    if (!['pending', 'approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'status must be pending, approved, or rejected' })
+    }
+    updates.status = status
+  }
+
+  if (comment) {
+    updates.comment = comment
+  }
+
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'Nothing to update' })
   }
 
   const { error } = await supabase
     .from('comments')
-    .delete()
-    .eq('project_id', projectId)
+    .update(updates)
+    .eq('id', id)
 
   if (error) {
     return res.status(500).json({ error: error.message })
   }
 
   return res.status(200).json({ success: true })
+}
+
+async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
+  const id = typeof req.query.id === 'string' ? req.query.id : undefined
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+
+  if (id) {
+    const { error } = await supabase.from('comments').delete().eq('id', id)
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ success: true })
+  }
+
+  if (projectId) {
+    const { error } = await supabase.from('comments').delete().eq('project_id', projectId)
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ success: true })
+  }
+
+  return res.status(400).json({ error: 'Missing required query param: id or projectId' })
 }
 
 async function handlePost(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
