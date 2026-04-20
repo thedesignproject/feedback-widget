@@ -1,5 +1,5 @@
 {
-  "name": "@tosses/feedback-widget",
+  "name": "@thedesignproject/feedback-widget",
   "version": "0.3.4",
   "description": "Visual feedback widget for React apps",
   "type": "module",

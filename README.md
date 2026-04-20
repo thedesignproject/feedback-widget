@@ -1,4 +1,4 @@
-# @tosses/feedback-widget
+# @thedesignproject/feedback-widget
 
 Visual feedback tool for React projects. Your client visits their deployed URL, clicks any element, and leaves a comment. You see everything instantly.
 
@@ -6,7 +6,7 @@ Visual feedback tool for React projects. Your client visits their deployed URL, 
 
 This repository contains two separate things:
 
-- **`src/`** — the React library published to npm as `@tosses/feedback-widget`. This is the product.
+- **`src/`** — the React library published to npm as `@thedesignproject/feedback-widget`. This is the product.
 - **`demo/` + `api/` + `supabase/`** — a live demo hosted on Vercel and a **reference implementation** of the backend the library expects. Copy these into your own project as a starting point; they are not part of the published library.
 
 The library talks to *your* backend, not ours. Only `projectId` and `apiBase` cross the library's boundary.
@@ -14,13 +14,13 @@ The library talks to *your* backend, not ours. Only `projectId` and `apiBase` cr
 ## Installation
 
 ```bash
-npm install @tosses/feedback-widget
+npm install @thedesignproject/feedback-widget
 ```
 
 ## Usage
 
 ```jsx
-import { FeedbackWidget } from '@tosses/feedback-widget'
+import { FeedbackWidget } from '@thedesignproject/feedback-widget'
 
 export default function App() {
   return (

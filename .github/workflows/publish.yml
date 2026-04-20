@@ -47,7 +47,7 @@ jobs:
           }
           JSON
           cat > index.tsx <<'TSX'
-          import { FeedbackWidget } from '@tosses/feedback-widget'
+          import { FeedbackWidget } from '@thedesignproject/feedback-widget'
           export default function App() {
             return <FeedbackWidget projectId="smoke" apiBase="https://x" />
           }
