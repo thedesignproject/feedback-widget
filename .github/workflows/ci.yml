@@ -19,21 +19,22 @@ jobs:
     name: check (react ${{ matrix.react }})
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
+          bun-version: latest
+      - run: bun install --frozen-lockfile
       - name: Install React ${{ matrix.react }}
+        env:
+          REACT_MAJOR: ${{ matrix.react }}
         run: |
-          npm install --no-save \
-            react@${{ matrix.react }} \
-            react-dom@${{ matrix.react }} \
-            @types/react@${{ matrix.react }} \
-            @types/react-dom@${{ matrix.react }}
-      - run: npm run typecheck
-      - run: npm run test:coverage
-      - run: npm run build
+          bun add --no-save \
+            "react@$REACT_MAJOR" \
+            "react-dom@$REACT_MAJOR" \
+            "@types/react@$REACT_MAJOR" \
+            "@types/react-dom@$REACT_MAJOR"
+      - run: bun run typecheck
+      - run: bun run test:coverage
+      - run: bun run build
       - name: Enforce bundle size ceiling
         run: |
           SIZE=$(wc -c < dist/feedback-widget.es.js | tr -d ' ')
@@ -50,16 +51,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      # npm is the one holdout: `bun audit` has no --omit=dev flag, and we gate
+      # on advisories in shipped runtime code only — not the dev toolchain
+      # (@vercel/node pulls transitive build-tools with open advisories its
+      # own latest release hasn't yet dropped; blocking merges on that churn
+      # would be dishonest). Everything else in this repo is bun. Dev-tree
+      # hygiene is tracked via Dependabot (.github/dependabot.yml).
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      # We gate on advisories in shipped runtime code (dependencies + peerDeps),
-      # not in the dev toolchain. @vercel/node pulls transitive build-tools with
-      # open advisories that its own latest release hasn't yet dropped; blocking
-      # merges on that churn would be dishonest. Dev-tree hygiene is tracked via
-      # Dependabot (.github/dependabot.yml).
+      - run: npm install --package-lock-only --no-audit --no-fund
       - name: npm audit (runtime only, high + critical)
         run: npm audit --omit=dev --audit-level=high
 

@@ -14,7 +14,7 @@ The library talks to *your* backend, not ours. Only `projectId` and `apiBase` cr
 ## Installation
 
 ```bash
-npm install @thedesignproject/feedback-widget
+bun add @thedesignproject/feedback-widget
 ```
 
 ## Usage
@@ -77,11 +77,11 @@ Until proper reviewer auth lands, deploy reviewer UIs (the sidebar) behind your 
 ## Development
 
 ```bash
-npm install
-npm run dev        # run the demo against a backend of your choice (configure via .env)
-npm test           # run the handler unit tests
-npm run typecheck  # run tsc across src/, api/, demo/
-npm run build      # produce the dist/ library artifacts
+bun install
+bun run dev        # run the demo against a backend of your choice (configure via .env)
+bun run test       # run the handler unit tests (vitest)
+bun run typecheck  # run tsc across src/, api/, demo/
+bun run build      # produce the dist/ library artifacts
 ```
 
 CI runs typecheck + tests + build on every PR.
