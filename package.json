@@ -2,6 +2,14 @@
   "name": "@thedesignproject/feedback-widget",
   "version": "0.3.4",
   "description": "Visual feedback widget for React apps",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thedesignproject/feedback-widget.git"
+  },
+  "homepage": "https://github.com/thedesignproject/feedback-widget#readme",
+  "bugs": {
+    "url": "https://github.com/thedesignproject/feedback-widget/issues"
+  },
   "type": "module",
   "main": "dist/feedback-widget.umd.js",
   "module": "dist/feedback-widget.es.js",
