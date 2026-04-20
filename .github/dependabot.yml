@@ -29,3 +29,12 @@ updates:
           - patch
       production-dependencies:
         dependency-type: production
+    # Vite 8 requires a coordinated vitest 3→4 + plugin-react 4→6 migration.
+    # Defer until we have a concrete reason (see closed #26 / #27).
+    ignore:
+      - dependency-name: vite
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@vitejs/plugin-react"
+        update-types:
+          - version-update:semver-major
