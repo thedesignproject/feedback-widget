@@ -48,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `x` / `y` fields are validated as finite numbers on the server; non-numeric values now return a clean 400 instead of leaking the underlying Postgres error.
 
 ### Security
-- Leaked Supabase anon key (committed in the initial commit and accidentally pushed) has been rotated. Git history was rewritten with `git filter-repo` to drop the `.env` blob.
+- Leaked Supabase anon key (committed in the initial commit and accidentally pushed) has been rotated. `.gitleaksignore` carries the single fingerprint for that historical blob so the `secrets` gate still fails on any *new* leak without re-firing on the rotated one. The blob remains in git history for traceability; only the live credential matters and that one is gone.
 - Row Level Security is enabled on the `comments` and `projects` tables; the deployed API uses the `service_role` key to bypass RLS legitimately. Anon-key traffic to the DB is denied by default.
 
 ## [0.3.4] - 2026-04-13
