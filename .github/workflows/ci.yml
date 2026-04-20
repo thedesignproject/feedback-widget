@@ -37,11 +37,8 @@ jobs:
       - name: Enforce bundle size ceiling
         run: |
           SIZE=$(wc -c < dist/feedback-widget.es.js | tr -d ' ')
-          # 260 KB = post-PR-20 baseline. The animated reviewer UX (framer-motion
-          # + lucide-react) lands the widget around 246 KB; this ceiling gives
-          # ~14 KB headroom to catch accidental regressions while reflecting the
-          # product's actual footprint. Slimming the bundle is tracked in
-          # thedesignproject/feedback-widget#29 — reduce this number when that work lands.
+          # ~14 KB headroom over the current framer-motion baseline. Drop when
+          # the animation bundle shrinks (thedesignproject/feedback-widget#29).
           MAX=266240
           echo "dist/feedback-widget.es.js: $SIZE bytes (max $MAX)"
           if [ "$SIZE" -gt "$MAX" ]; then

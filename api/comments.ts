@@ -1,6 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
+const SMOKE_CLEANUP_HEADER = 'x-smoke-cleanup-token'
+const SMOKE_PROJECT_PREFIX = 'smoke-'
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') {
     return res.status(204).end()
@@ -112,12 +115,9 @@ async function handlePatch(req: VercelRequest, res: VercelResponse, supabase: Su
   return res.status(200).json({ success: true })
 }
 
-// DELETE dispatches by query param:
-//   ?id=<uuid>         → single-comment delete (reviewer sidebar). Unauthenticated
-//                        in v0; requires knowing the UUID. Reviewer auth tracked
-//                        as a follow-up — deploy reviewer UIs behind embedder auth.
-//   ?projectId=smoke-* → bulk cleanup for the CI smoke workflow. Token-gated and
-//                        scoped to smoke-* projectIds so no one else can wipe a project.
+// Two DELETE surfaces with deliberately different trust: ?id= is the reviewer
+// sidebar (unauthenticated in v0, single row per call); ?projectId= is the
+// smoke-cleanup path (token + smoke-* prefix required). See README Security.
 async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
   const id = typeof req.query.id === 'string' ? req.query.id : undefined
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
@@ -133,12 +133,12 @@ async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: S
     if (!cleanupToken) {
       return res.status(501).json({ error: 'Bulk DELETE disabled: SMOKE_CLEANUP_TOKEN not configured' })
     }
-    const presented = req.headers['x-smoke-cleanup-token']
+    const presented = req.headers[SMOKE_CLEANUP_HEADER]
     if (typeof presented !== 'string' || presented !== cleanupToken) {
       return res.status(401).json({ error: 'Unauthorized' })
     }
-    if (!projectId.startsWith('smoke-')) {
-      return res.status(400).json({ error: 'Bulk DELETE is scoped to smoke-* projectIds only' })
+    if (!projectId.startsWith(SMOKE_PROJECT_PREFIX)) {
+      return res.status(400).json({ error: `Bulk DELETE is scoped to ${SMOKE_PROJECT_PREFIX}* projectIds only` })
     }
     const { error } = await supabase.from('comments').delete().eq('project_id', projectId)
     if (error) return res.status(500).json({ error: error.message })

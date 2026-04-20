@@ -27,21 +27,14 @@ function mockFetch(
   return calls
 }
 
-// Drive the widget into 'commenting' mode by:
-//  1. Pressing the 'C' shortcut (idle → selecting). More stable than hunting
-//     the redesigned pill trigger's DOM, and exercises the same state path.
-//  2. Dispatching a click on a target node (selecting → commenting with target).
-// Returns the textarea and the Send button for the caller to interact with.
 async function enterCommentingMode() {
-  // Clean up any target node left over from a previous test (render's auto-
-  // cleanup removes the widget root, but not nodes we appended by hand).
+  // render's auto-cleanup removes the widget root but not nodes we appended.
   document.querySelectorAll('[data-test-target]').forEach((n) => n.remove())
 
   const targetNode = document.createElement('article')
   targetNode.setAttribute('data-test-target', '')
   document.body.appendChild(targetNode)
 
-  // Wait for the widget to mount before dispatching shortcuts.
   await waitFor(() => {
     if (document.querySelectorAll('[data-fw]').length === 0) {
       throw new Error('widget root not mounted yet')
@@ -68,10 +61,8 @@ async function enterCommentingMode() {
     return el
   })
 
-  // The Send button is rendered twice in the widget (disabled collapsed form
-  // and enabled expanded form) depending on whether the comment has text.
-  // Don't snapshot it here — each test queries *after* typing, so it grabs
-  // the currently-mounted enabled button.
+  // The widget renders two Send buttons (disabled collapsed / enabled expanded)
+  // conditionally on comment text — re-query after typing, don't snapshot.
   const getSendButton = () => {
     const btn = document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')
     if (!btn) throw new Error('Send button not found')
@@ -212,19 +203,15 @@ describe('<FeedbackWidget />', () => {
         expect(posts.length).toBe(1)
       })
 
-      // Give React a tick to flush any state updates.
       await new Promise((r) => setTimeout(r, 20))
 
-      // The textarea still holds the typed draft (the widget only clears on
-      // success), so checking body.textContent would false-match. Instead,
-      // assert the sidebar's empty-state marker is still present — proving no
-      // optimistic comment was added to state on the failed POST.
+      // Textarea still holds the draft, so body.textContent would false-match.
+      // The sidebar empty-state is the real signal that state wasn't mutated.
       const sidebarEmpty = Array.from(
         document.querySelectorAll<HTMLDivElement>('[data-fw] div'),
       ).some((el) => el.textContent === 'No comments yet')
       expect(sidebarEmpty).toBe(true)
 
-      // Sanity: widget surfaced the failure via console.warn.
       expect(console.warn).toHaveBeenCalled()
     })
   })
