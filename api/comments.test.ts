@@ -55,10 +55,11 @@ describe('api/comments', () => {
       expect(res.statusCode).toBe(204)
     })
 
-    it('returns 405 for PATCH', async () => {
+    it('returns 400 for PATCH without id', async () => {
       const res = mockRes()
-      await call(mockReq({ method: 'PATCH' }), res)
-      expect(res.statusCode).toBe(405)
+      await call(mockReq({ method: 'PATCH', body: {} }), res)
+      expect(res.statusCode).toBe(400)
+      expect((res.body as { error: string }).error).toMatch(/id/i)
     })
 
     it('returns 500 when env vars missing', async () => {

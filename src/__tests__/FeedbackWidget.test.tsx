@@ -28,7 +28,8 @@ function mockFetch(
 }
 
 // Drive the widget into 'commenting' mode by:
-//  1. Clicking the floating trigger button (idle → selecting).
+//  1. Pressing the 'C' shortcut (idle → selecting). More stable than hunting
+//     the redesigned pill trigger's DOM, and exercises the same state path.
 //  2. Dispatching a click on a target node (selecting → commenting with target).
 // Returns the textarea and the Send button for the caller to interact with.
 async function enterCommentingMode() {
@@ -40,17 +41,15 @@ async function enterCommentingMode() {
   targetNode.setAttribute('data-test-target', '')
   document.body.appendChild(targetNode)
 
-  // Wait until the widget's root is mounted before reaching for the trigger.
-  const trigger = await waitFor(() => {
-    const roots = document.querySelectorAll('[data-fw]')
-    for (const root of roots) {
-      const btn = root.querySelector<HTMLButtonElement>(':scope > button')
-      if (btn) return btn
+  // Wait for the widget to mount before dispatching shortcuts.
+  await waitFor(() => {
+    if (document.querySelectorAll('[data-fw]').length === 0) {
+      throw new Error('widget root not mounted yet')
     }
-    throw new Error('trigger button not found yet')
   })
+
   await act(async () => {
-    fireEvent.click(trigger)
+    fireEvent.keyDown(window, { key: 'c' })
   })
 
   const evt = new MouseEvent('click', {
@@ -69,12 +68,17 @@ async function enterCommentingMode() {
     return el
   })
 
-  const sendButton = Array.from(document.querySelectorAll('button')).find(
-    (b) => b.textContent?.includes('Send'),
-  ) as HTMLButtonElement | undefined
-  if (!sendButton) throw new Error('Send button not found')
+  // The Send button is rendered twice in the widget (disabled collapsed form
+  // and enabled expanded form) depending on whether the comment has text.
+  // Don't snapshot it here — each test queries *after* typing, so it grabs
+  // the currently-mounted enabled button.
+  const getSendButton = () => {
+    const btn = document.querySelector<HTMLButtonElement>('button[aria-label="Send"]')
+    if (!btn) throw new Error('Send button not found')
+    return btn
+  }
 
-  return { textarea, sendButton, targetNode }
+  return { textarea, getSendButton, targetNode }
 }
 
 describe('<FeedbackWidget />', () => {
@@ -144,9 +148,9 @@ describe('<FeedbackWidget />', () => {
       const calls = mockFetch()
       render(<FeedbackWidget projectId="proj" apiBase="https://x.example/api" />)
 
-      const { textarea, sendButton } = await enterCommentingMode()
+      const { textarea, getSendButton } = await enterCommentingMode()
       fireEvent.change(textarea, { target: { value: 'bug here' } })
-      fireEvent.click(sendButton)
+      fireEvent.click(getSendButton())
 
       await waitFor(() => {
         const post = calls.find((c) => c.init?.method === 'POST')
@@ -177,9 +181,10 @@ describe('<FeedbackWidget />', () => {
       )
       render(<FeedbackWidget projectId="proj" apiBase="https://x.example/api" />)
 
-      const { textarea, sendButton } = await enterCommentingMode()
+      const { textarea, getSendButton } = await enterCommentingMode()
       fireEvent.change(textarea, { target: { value: 'rapid' } })
 
+      const sendButton = getSendButton()
       fireEvent.click(sendButton)
       fireEvent.click(sendButton)
       fireEvent.click(sendButton)
@@ -198,9 +203,9 @@ describe('<FeedbackWidget />', () => {
       // Suppress the component's warn-log for the expected failure.
       vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-      const { textarea, sendButton } = await enterCommentingMode()
+      const { textarea, getSendButton } = await enterCommentingMode()
       fireEvent.change(textarea, { target: { value: 'should not appear' } })
-      fireEvent.click(sendButton)
+      fireEvent.click(getSendButton())
 
       await waitFor(() => {
         const posts = calls.filter((c) => c.init?.method === 'POST')
@@ -211,15 +216,13 @@ describe('<FeedbackWidget />', () => {
       await new Promise((r) => setTimeout(r, 20))
 
       // The textarea still holds the typed draft (the widget only clears on
-      // success). The assertion we care about: the sidebar comment list does
-      // NOT contain an entry with that text.
-      const sidebarRows = Array.from(
-        document.querySelectorAll<HTMLDivElement>('div[style*="border-radius: 8px"]'),
-      ).filter((el) => el.style.borderLeftColor === 'rgb(59, 130, 246)')
-      const hasGhost = sidebarRows.some((el) =>
-        el.textContent?.includes('should not appear'),
-      )
-      expect(hasGhost).toBe(false)
+      // success), so checking body.textContent would false-match. Instead,
+      // assert the sidebar's empty-state marker is still present — proving no
+      // optimistic comment was added to state on the failed POST.
+      const sidebarEmpty = Array.from(
+        document.querySelectorAll<HTMLDivElement>('[data-fw] div'),
+      ).some((el) => el.textContent === 'No comments yet')
+      expect(sidebarEmpty).toBe(true)
 
       // Sanity: widget surfaced the failure via console.warn.
       expect(console.warn).toHaveBeenCalled()

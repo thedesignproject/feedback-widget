@@ -17,6 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'GET') return handleGet(req, res, supabase)
   if (req.method === 'POST') return handlePost(req, res, supabase)
+  if (req.method === 'PATCH') return handlePatch(req, res, supabase)
   if (req.method === 'DELETE') return handleDelete(req, res, supabase)
 
   return res.status(405).json({ error: 'Method not allowed' })
@@ -31,7 +32,7 @@ async function handleGet(req: VercelRequest, res: VercelResponse, supabase: Supa
 
   const { data, error } = await supabase
     .from('comments')
-    .select('id, project_id, url, x, y, element, comment, created_at')
+    .select('id, project_id, url, x, y, element, comment, status, created_at')
     .eq('project_id', projectId)
     .order('created_at', { ascending: false })
 
@@ -75,31 +76,74 @@ async function handlePost(req: VercelRequest, res: VercelResponse, supabase: Sup
   return res.status(200).json({ success: true })
 }
 
-// DELETE is intentionally narrow: it only exists so the Smoke workflow can clean
-// up its own probe rows after a round-trip. It requires a shared secret header
-// AND a projectId scope — there is no way to delete anything else through it.
-async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
-  const cleanupToken = process.env.SMOKE_CLEANUP_TOKEN
-  if (!cleanupToken) {
-    return res.status(501).json({ error: 'DELETE disabled: SMOKE_CLEANUP_TOKEN not configured' })
+async function handlePatch(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
+  const { id, status, comment } = req.body ?? {}
+
+  if (!id) {
+    return res.status(400).json({ error: 'Missing required field: id' })
   }
 
-  const presented = req.headers['x-smoke-cleanup-token']
-  if (typeof presented !== 'string' || presented !== cleanupToken) {
-    return res.status(401).json({ error: 'Unauthorized' })
+  const updates: Record<string, string> = {}
+
+  if (status) {
+    if (!['pending', 'approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'status must be pending, approved, or rejected' })
+    }
+    updates.status = status
   }
 
-  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
-  if (!projectId) {
-    return res.status(400).json({ error: 'Missing required query param: projectId' })
-  }
-  if (!projectId.startsWith('smoke-')) {
-    return res.status(400).json({ error: 'DELETE is scoped to smoke-* projectIds only' })
+  if (comment) {
+    updates.comment = comment
   }
 
-  const { error } = await supabase.from('comments').delete().eq('project_id', projectId)
+  if (Object.keys(updates).length === 0) {
+    return res.status(400).json({ error: 'Nothing to update' })
+  }
+
+  const { error } = await supabase
+    .from('comments')
+    .update(updates)
+    .eq('id', id)
+
   if (error) {
     return res.status(500).json({ error: error.message })
   }
+
   return res.status(200).json({ success: true })
+}
+
+// DELETE dispatches by query param:
+//   ?id=<uuid>         → single-comment delete (reviewer sidebar). Unauthenticated
+//                        in v0; requires knowing the UUID. Reviewer auth tracked
+//                        as a follow-up — deploy reviewer UIs behind embedder auth.
+//   ?projectId=smoke-* → bulk cleanup for the CI smoke workflow. Token-gated and
+//                        scoped to smoke-* projectIds so no one else can wipe a project.
+async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
+  const id = typeof req.query.id === 'string' ? req.query.id : undefined
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+
+  if (id) {
+    const { error } = await supabase.from('comments').delete().eq('id', id)
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ success: true })
+  }
+
+  if (projectId) {
+    const cleanupToken = process.env.SMOKE_CLEANUP_TOKEN
+    if (!cleanupToken) {
+      return res.status(501).json({ error: 'Bulk DELETE disabled: SMOKE_CLEANUP_TOKEN not configured' })
+    }
+    const presented = req.headers['x-smoke-cleanup-token']
+    if (typeof presented !== 'string' || presented !== cleanupToken) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+    if (!projectId.startsWith('smoke-')) {
+      return res.status(400).json({ error: 'Bulk DELETE is scoped to smoke-* projectIds only' })
+    }
+    const { error } = await supabase.from('comments').delete().eq('project_id', projectId)
+    if (error) return res.status(500).json({ error: error.message })
+    return res.status(200).json({ success: true })
+  }
+
+  return res.status(400).json({ error: 'Missing required query param: id or projectId' })
 }

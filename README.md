@@ -44,10 +44,13 @@ export default function App() {
 
 ## Backend setup (reference implementation)
 
-The widget expects two HTTP endpoints at `apiBase`:
+The widget expects these HTTP endpoints at `apiBase`:
 
 - `GET /comments?projectId=…` → returns `Comment[]` ordered by newest first.
 - `POST /comments` with JSON body `{ projectId, url, x, y, element, comment }` → inserts a row and returns `{ success: true }`.
+- `PATCH /comments` with JSON body `{ id, status?, comment? }` → updates a comment (used by the reviewer sidebar for resolve / edit).
+- `DELETE /comments?id=<uuid>` → deletes a single comment (used by the reviewer sidebar).
+- `DELETE /comments?projectId=smoke-*` → bulk delete, token-gated for the CI smoke workflow only (see `SMOKE_CLEANUP_TOKEN`).
 
 `api/comments.ts` in this repo implements both on a single Vercel serverless function backed by Supabase Postgres. To stand up a copy:
 
@@ -58,7 +61,13 @@ The widget expects two HTTP endpoints at `apiBase`:
    - `SUPABASE_KEY` — the **service_role** key (Supabase Dashboard → Settings → API). This key bypasses RLS and must never ship to a browser. Do not prefix it with `VITE_`.
 4. Point the widget's `apiBase` prop at `https://<your-deployment>/api`.
 
-This is one working setup, not the only one. Anything that implements the two endpoints above (Next.js route handlers, Cloudflare Workers, a plain Express server) will work.
+This is one working setup, not the only one. Anything that implements the endpoints above (Next.js route handlers, Cloudflare Workers, a plain Express server) will work.
+
+## Security
+
+In v0, reviewer operations (`PATCH /comments` and `DELETE /comments?id=`) are **unauthenticated**. Anyone who can reach `apiBase` and knows a comment's UUID can edit or delete that row. The bulk `DELETE ?projectId=` path is gated by `SMOKE_CLEANUP_TOKEN` and scoped to `smoke-*` projectIds, so it cannot be used to wipe real projects.
+
+Until proper reviewer auth lands, deploy reviewer UIs (the sidebar) behind your own authentication layer — do not expose them on public pages. Tracked in [issue #28](https://github.com/thedesignproject/feedback-widget/issues/28).
 
 ## Requirements
 
