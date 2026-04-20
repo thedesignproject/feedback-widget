@@ -1,0 +1,41 @@
+name: Smoke
+
+on:
+  deployment_status:
+
+jobs:
+  round-trip:
+    if: github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'Production'
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST + GET round trip
+        env:
+          DEPLOY_URL: ${{ github.event.deployment_status.target_url }}
+        run: |
+          set -euo pipefail
+          PROBE="smoke-$(date +%s)-${GITHUB_SHA:0:7}"
+          echo "Probing $DEPLOY_URL/api/comments with projectId=$PROBE"
+
+          POST_RES=$(curl -sS -o /tmp/post.json -w "%{http_code}" \
+            -X POST "$DEPLOY_URL/api/comments" \
+            -H 'Content-Type: application/json' \
+            --data "{\"projectId\":\"$PROBE\",\"url\":\"https://smoke\",\"x\":1,\"y\":1,\"element\":\"body\",\"comment\":\"ci smoke test\"}")
+          if [ "$POST_RES" != "200" ]; then
+            echo "::error::POST returned $POST_RES: $(cat /tmp/post.json)"
+            exit 1
+          fi
+
+          GET_RES=$(curl -sS -o /tmp/get.json -w "%{http_code}" \
+            "$DEPLOY_URL/api/comments?projectId=$PROBE")
+          if [ "$GET_RES" != "200" ]; then
+            echo "::error::GET returned $GET_RES: $(cat /tmp/get.json)"
+            exit 1
+          fi
+
+          if ! grep -q "ci smoke test" /tmp/get.json; then
+            echo "::error::Round-trip failed — POSTed row not returned by GET"
+            cat /tmp/get.json
+            exit 1
+          fi
+
+          echo "Round-trip OK"

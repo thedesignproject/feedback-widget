@@ -5,16 +5,66 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        react: ['18', '19']
+    name: check (react ${{ matrix.react }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Install React ${{ matrix.react }}
+        run: |
+          npm install --no-save \
+            react@${{ matrix.react }} \
+            react-dom@${{ matrix.react }} \
+            @types/react@${{ matrix.react }} \
+            @types/react-dom@${{ matrix.react }}
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run build
+      - name: Enforce bundle size ceiling
+        run: |
+          SIZE=$(wc -c < dist/feedback-widget.es.js | tr -d ' ')
+          MAX=51200
+          echo "dist/feedback-widget.es.js: $SIZE bytes (max $MAX)"
+          if [ "$SIZE" -gt "$MAX" ]; then
+            echo "::error::Bundle exceeds size ceiling"
+            exit 1
+          fi
+
+  audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
+      - name: npm audit (high + critical only)
+        run: npm audit --audit-level=high
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sL https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz | tar -xz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+      - name: Scan for committed secrets
+        run: gitleaks detect --source . --redact --verbose --exit-code 1

@@ -10,9 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `api/comments.ts` handles both `GET` and `POST` on one route.
 - Handler unit tests (vitest) covering method dispatch, validation, and the silent-RLS failure mode.
+- Widget unit tests (@testing-library/react + happy-dom) covering mount, fetch URL encoding, offline resilience, and projectId refetch.
 - `npm run typecheck` script that type-checks `src/`, `api/`, and `demo/` together.
-- GitHub Actions CI: typecheck + tests + build on every pull request.
-- Vercel build now runs `npm run typecheck` before `vite build`, so type errors in `api/` block deploys.
+- `npm run test:coverage` script + v8 coverage reporter.
+- GitHub Actions CI workflow:
+  - `check (react 18)` / `check (react 19)` — matrix job running typecheck, tests-with-coverage, build, and a hard 50 KB ceiling on `dist/feedback-widget.es.js`.
+  - `audit` — `npm audit --audit-level=high` fails on high/critical vulnerabilities.
+  - `secrets` — gitleaks scans the full history for committed credentials.
+  - Concurrency cancellation on repeat pushes to the same ref.
+  - Node version pinned via `.nvmrc`.
+- Smoke workflow (`.github/workflows/smoke.yml`): on every successful Production deployment, runs a POST + GET round-trip against the live URL and fails the workflow if the POSTed row isn't returned by GET.
+- Publish workflow (`.github/workflows/publish.yml`): on `v*` tags, verifies the tag matches `package.json`, runs the full check pipeline, and publishes to npm with provenance. Requires `NPM_TOKEN` secret.
+- Branch protection requires `check (react 18)`, `check (react 19)`, `audit`, and `secrets` to pass before merging to `main`.
+- Vercel build runs `npm run typecheck` before `vite build`, so type errors in `api/` block deploys.
 - README section describing the library-vs-demo repo layout and the reference backend.
 
 ### Changed
