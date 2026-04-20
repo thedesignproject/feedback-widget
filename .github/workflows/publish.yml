@@ -27,7 +27,16 @@ jobs:
       - name: Pack tarball
         id: pack
         run: |
-          TARBALL=$(bun pm pack --quiet)
+          # Don't rely on `bun pm pack`'s stdout shape — it's varied between
+          # bun versions (--quiet still emits extra lines on some builds),
+          # and a single stray newline breaks the $GITHUB_OUTPUT file format.
+          # Instead: run the pack, then glob for the .tgz it produced.
+          bun pm pack --quiet >/dev/null
+          TARBALL=$(ls -1 *.tgz 2>/dev/null | head -1)
+          if [ -z "$TARBALL" ]; then
+            echo "::error::bun pm pack did not produce a .tgz"
+            exit 1
+          fi
           echo "path=$(pwd)/$TARBALL" >> "$GITHUB_OUTPUT"
       - name: Build consumer app against React ${{ matrix.react }}
         env:
