@@ -547,6 +547,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                 <button
                   onClick={handleSend}
                   disabled
+                  aria-label="Send"
                   style={{
                     width: 28,
                     height: 28,
@@ -617,6 +618,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                 <button
                   onClick={handleSend}
                   disabled={!comment.trim() || sending}
+                  aria-label="Send"
                   style={{
                     width: 28,
                     height: 28,

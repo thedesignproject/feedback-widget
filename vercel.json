@@ -1,5 +1,5 @@
 {
-  "buildCommand": "vite build --config demo/vite.config.ts",
+  "buildCommand": "npm run typecheck && vite build --config demo/vite.config.ts",
   "outputDirectory": "demo/dist",
   "functions": {
     "api/**/*.ts": {

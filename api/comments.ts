@@ -43,6 +43,39 @@ async function handleGet(req: VercelRequest, res: VercelResponse, supabase: Supa
   return res.status(200).json(data ?? [])
 }
 
+async function handlePost(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
+  const { projectId, url, x, y, element, comment } = req.body ?? {}
+
+  if (!projectId || !url || !element || !comment) {
+    return res.status(400).json({
+      error: 'Missing required fields: projectId, url, element, comment',
+    })
+  }
+
+  if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) {
+    return res.status(400).json({ error: 'x and y must be finite numbers' })
+  }
+
+  // .select() forces Prefer: return=representation so the server sends
+  // back the inserted row — or a 4xx if RLS blocked the write. Without
+  // it, insert() uses Prefer: return=minimal and silently reports
+  // success even when no row was stored.
+  const { data, error } = await supabase
+    .from('comments')
+    .insert([{ project_id: projectId, url, x, y, element, comment }] as never)
+    .select()
+
+  if (error) {
+    return res.status(500).json({ error: error.message })
+  }
+
+  if (!data || data.length === 0) {
+    return res.status(500).json({ error: 'Insert returned no row' })
+  }
+
+  return res.status(200).json({ success: true })
+}
+
 async function handlePatch(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
   const { id, status, comment } = req.body ?? {}
 
@@ -79,6 +112,12 @@ async function handlePatch(req: VercelRequest, res: VercelResponse, supabase: Su
   return res.status(200).json({ success: true })
 }
 
+// DELETE dispatches by query param:
+//   ?id=<uuid>         → single-comment delete (reviewer sidebar). Unauthenticated
+//                        in v0; requires knowing the UUID. Reviewer auth tracked
+//                        as a follow-up — deploy reviewer UIs behind embedder auth.
+//   ?projectId=smoke-* → bulk cleanup for the CI smoke workflow. Token-gated and
+//                        scoped to smoke-* projectIds so no one else can wipe a project.
 async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
   const id = typeof req.query.id === 'string' ? req.query.id : undefined
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
@@ -90,34 +129,21 @@ async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: S
   }
 
   if (projectId) {
+    const cleanupToken = process.env.SMOKE_CLEANUP_TOKEN
+    if (!cleanupToken) {
+      return res.status(501).json({ error: 'Bulk DELETE disabled: SMOKE_CLEANUP_TOKEN not configured' })
+    }
+    const presented = req.headers['x-smoke-cleanup-token']
+    if (typeof presented !== 'string' || presented !== cleanupToken) {
+      return res.status(401).json({ error: 'Unauthorized' })
+    }
+    if (!projectId.startsWith('smoke-')) {
+      return res.status(400).json({ error: 'Bulk DELETE is scoped to smoke-* projectIds only' })
+    }
     const { error } = await supabase.from('comments').delete().eq('project_id', projectId)
     if (error) return res.status(500).json({ error: error.message })
     return res.status(200).json({ success: true })
   }
 
   return res.status(400).json({ error: 'Missing required query param: id or projectId' })
-}
-
-async function handlePost(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
-  const { projectId, url, x, y, element, comment } = req.body ?? {}
-
-  if (!projectId || !url || !element || !comment) {
-    return res.status(400).json({
-      error: 'Missing required fields: projectId, url, element, comment',
-    })
-  }
-
-  if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) {
-    return res.status(400).json({ error: 'x and y must be finite numbers' })
-  }
-
-  const { error } = await supabase.from('comments').insert([
-    { project_id: projectId, url, x, y, element, comment },
-  ] as never)
-
-  if (error) {
-    return res.status(500).json({ error: error.message })
-  }
-
-  return res.status(200).json({ success: true })
 }
