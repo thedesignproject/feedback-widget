@@ -5,16 +5,35 @@ on:
 
 jobs:
   round-trip:
-    if: github.event.deployment_status.state == 'success' && github.event.deployment.environment == 'Production'
+    # environment_url is the deployed app URL (e.g. https://...vercel.app).
+    # target_url is the provider's status/log page and MUST NOT be used as the
+    # probe target — curl'ing it will not exercise the app.
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment == 'Production' &&
+      github.event.deployment_status.environment_url != ''
     runs-on: ubuntu-latest
     steps:
-      - name: POST + GET round trip
+      - name: POST + GET round trip, then clean up
         env:
-          DEPLOY_URL: ${{ github.event.deployment_status.target_url }}
+          DEPLOY_URL: ${{ github.event.deployment_status.environment_url }}
+          CLEANUP_TOKEN: ${{ secrets.SMOKE_CLEANUP_TOKEN }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           PROBE="smoke-$(date +%s)-${GITHUB_SHA:0:7}"
           echo "Probing $DEPLOY_URL/api/comments with projectId=$PROBE"
+
+          cleanup() {
+            if [ -n "${CLEANUP_TOKEN:-}" ]; then
+              curl -sS -o /dev/null -w "cleanup: %{http_code}\n" \
+                -X DELETE "$DEPLOY_URL/api/comments?projectId=$PROBE" \
+                -H "x-smoke-cleanup-token: $CLEANUP_TOKEN" || true
+            else
+              echo "::warning::SMOKE_CLEANUP_TOKEN not set — leaving probe row behind"
+            fi
+          }
+          trap cleanup EXIT
 
           POST_RES=$(curl -sS -o /tmp/post.json -w "%{http_code}" \
             -X POST "$DEPLOY_URL/api/comments" \
@@ -32,8 +51,11 @@ jobs:
             exit 1
           fi
 
-          if ! grep -q "ci smoke test" /tmp/get.json; then
-            echo "::error::Round-trip failed — POSTed row not returned by GET"
+          # Match on the unique probe id, not a shared string. A generic grep
+          # would false-positive against any prior row that happened to carry
+          # the same literal.
+          if ! grep -F -q -- "$PROBE" /tmp/get.json; then
+            echo "::error::Round-trip failed — POSTed row (projectId=$PROBE) not returned by GET"
             cat /tmp/get.json
             exit 1
           fi

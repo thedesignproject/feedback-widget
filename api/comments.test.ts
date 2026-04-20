@@ -55,9 +55,9 @@ describe('api/comments', () => {
       expect(res.statusCode).toBe(204)
     })
 
-    it('returns 405 for DELETE', async () => {
+    it('returns 405 for PATCH', async () => {
       const res = mockRes()
-      await call(mockReq({ method: 'DELETE' }), res)
+      await call(mockReq({ method: 'PATCH' }), res)
       expect(res.statusCode).toBe(405)
     })
 
@@ -166,6 +166,115 @@ describe('api/comments', () => {
       } as never)
       const res = mockRes()
       await call(mockReq({ method: 'POST', body: validBody }), res)
+      expect(res.statusCode).toBe(500)
+    })
+  })
+
+  describe('DELETE (smoke cleanup)', () => {
+    beforeEach(() => {
+      process.env.SMOKE_CLEANUP_TOKEN = 'secret-abc'
+    })
+
+    it('returns 501 when SMOKE_CLEANUP_TOKEN is not configured', async () => {
+      delete process.env.SMOKE_CLEANUP_TOKEN
+      const res = mockRes()
+      await call(
+        mockReq({
+          method: 'DELETE',
+          headers: { 'x-smoke-cleanup-token': 'secret-abc' },
+          query: { projectId: 'smoke-x' },
+        }),
+        res,
+      )
+      expect(res.statusCode).toBe(501)
+    })
+
+    it('returns 401 when token header is missing', async () => {
+      const res = mockRes()
+      await call(
+        mockReq({ method: 'DELETE', headers: {}, query: { projectId: 'smoke-x' } }),
+        res,
+      )
+      expect(res.statusCode).toBe(401)
+    })
+
+    it('returns 401 when token header is wrong', async () => {
+      const res = mockRes()
+      await call(
+        mockReq({
+          method: 'DELETE',
+          headers: { 'x-smoke-cleanup-token': 'nope' },
+          query: { projectId: 'smoke-x' },
+        }),
+        res,
+      )
+      expect(res.statusCode).toBe(401)
+    })
+
+    it('returns 400 without projectId', async () => {
+      const res = mockRes()
+      await call(
+        mockReq({
+          method: 'DELETE',
+          headers: { 'x-smoke-cleanup-token': 'secret-abc' },
+          query: {},
+        }),
+        res,
+      )
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('refuses to delete non-smoke projectIds', async () => {
+      const res = mockRes()
+      await call(
+        mockReq({
+          method: 'DELETE',
+          headers: { 'x-smoke-cleanup-token': 'secret-abc' },
+          query: { projectId: 'production-data' },
+        }),
+        res,
+      )
+      expect(res.statusCode).toBe(400)
+      expect((res.body as { error: string }).error).toMatch(/smoke-\*/)
+    })
+
+    it('deletes smoke rows on valid request', async () => {
+      const deleteMock = vi.fn(() => ({
+        eq: () => Promise.resolve({ error: null }),
+      }))
+      vi.mocked(createClient).mockReturnValue({
+        from: () => ({ delete: deleteMock }),
+      } as never)
+      const res = mockRes()
+      await call(
+        mockReq({
+          method: 'DELETE',
+          headers: { 'x-smoke-cleanup-token': 'secret-abc' },
+          query: { projectId: 'smoke-1234' },
+        }),
+        res,
+      )
+      expect(res.statusCode).toBe(200)
+      expect(deleteMock).toHaveBeenCalled()
+    })
+
+    it('returns 500 when supabase returns an error', async () => {
+      vi.mocked(createClient).mockReturnValue({
+        from: () => ({
+          delete: () => ({
+            eq: () => Promise.resolve({ error: { message: 'rls denied' } }),
+          }),
+        }),
+      } as never)
+      const res = mockRes()
+      await call(
+        mockReq({
+          method: 'DELETE',
+          headers: { 'x-smoke-cleanup-token': 'secret-abc' },
+          query: { projectId: 'smoke-x' },
+        }),
+        res,
+      )
       expect(res.statusCode).toBe(500)
     })
   })

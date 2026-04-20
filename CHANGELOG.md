@@ -10,16 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `api/comments.ts` handles both `GET` and `POST` on one route.
 - Handler unit tests (vitest) covering method dispatch, validation, and the silent-RLS failure mode.
-- Widget unit tests (@testing-library/react + happy-dom) covering mount, fetch URL encoding, offline resilience, and projectId refetch.
+- Widget unit tests (@testing-library/react + happy-dom) covering mount, fetch URL encoding, offline resilience, projectId refetch, and the full comment-submit path (POST body shape, duplicate-Send guard, failure-does-not-ghost).
+- `getSelector` unit tests guarding the `INVALID_IDENT_CHARS` rename.
+- `DELETE /api/comments?projectId=smoke-...` handler gated by a `SMOKE_CLEANUP_TOKEN` secret and scoped to `smoke-*` projectIds only. Smoke workflow uses it to remove its probe row after every round-trip.
+- `.github/dependabot.yml` groups weekly dev / prod / actions updates so advisory churn does not drown signal.
+- `scripts/bootstrap-branch-protection.sh` + `scripts/branch-protection.json` codify the required-checks rule so the protection config is reproducible from disk rather than tribal `gh api` lore.
+- `consumer-smoke` job in the publish pipeline: `npm pack` the tarball, install it into a throwaway React 18 and React 19 app, and typecheck the import. Catches `exports` / `peerDependencies` / types mistakes that in-repo tests cannot.
 - `npm run typecheck` script that type-checks `src/`, `api/`, and `demo/` together.
 - `npm run test:coverage` script + v8 coverage reporter.
 - GitHub Actions CI workflow:
   - `check (react 18)` / `check (react 19)` — matrix job running typecheck, tests-with-coverage, build, and a hard 50 KB ceiling on `dist/feedback-widget.es.js`.
-  - `audit` — `npm audit --audit-level=high` fails on high/critical vulnerabilities.
-  - `secrets` — gitleaks scans the full history for committed credentials.
+  - `audit` — `npm audit --omit=dev --audit-level=high` fails on high/critical advisories in **shipped runtime** deps. Dev-tool advisories are tracked via Dependabot rather than blocking merges on upstream churn the maintainers cannot fix.
+  - `secrets` — gitleaks (pinned by `sha256`) scans the full history for committed credentials.
   - Concurrency cancellation on repeat pushes to the same ref.
   - Node version pinned via `.nvmrc`.
-- Smoke workflow (`.github/workflows/smoke.yml`): on every successful Production deployment, runs a POST + GET round-trip against the live URL and fails the workflow if the POSTed row isn't returned by GET.
+- Smoke workflow (`.github/workflows/smoke.yml`): on every successful Production deployment, probes `environment_url` with a unique `smoke-<ts>-<sha>` projectId, asserts the POSTed row round-trips through GET (matched by the unique probe id, not a shared string), and deletes the probe row on exit via the gated DELETE endpoint.
 - Publish workflow (`.github/workflows/publish.yml`): on `v*` tags, verifies the tag matches `package.json`, runs the full check pipeline, and publishes to npm with provenance. Requires `NPM_TOKEN` secret.
 - Branch protection requires `check (react 18)`, `check (react 19)`, `audit`, and `secrets` to pass before merging to `main`.
 - Vercel build runs `npm run typecheck` before `vite build`, so type errors in `api/` block deploys.
