@@ -1,0 +1,129 @@
+name: React Doctor
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  react-doctor:
+    name: React Health Check
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Get PR score
+        id: pr
+        run: |
+          SCORE=$(bunx --bun react-doctor@latest . --score 2>/dev/null | grep -E '^[0-9]+$' | tail -1)
+          if [ -z "$SCORE" ]; then
+            echo "::warning::react-doctor did not return a valid score for PR branch"
+            SCORE=0
+          fi
+          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+          echo "PR branch score: $SCORE"
+
+      - name: Checkout base branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          clean: false
+
+      - run: bun install --frozen-lockfile
+
+      - name: Get base score
+        id: base
+        run: |
+          SCORE=$(bunx --bun react-doctor@latest . --score 2>/dev/null | grep -E '^[0-9]+$' | tail -1)
+          if [ -z "$SCORE" ]; then
+            echo "::warning::react-doctor did not return a valid score for base branch"
+            SCORE=0
+          fi
+          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+          echo "Base branch score: $SCORE"
+
+      - name: Compare scores
+        id: compare
+        env:
+          BASE: ${{ steps.base.outputs.score }}
+          PR: ${{ steps.pr.outputs.score }}
+        run: |
+          DIFF=$((PR - BASE))
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "pr=$PR" >> "$GITHUB_OUTPUT"
+          echo "diff=$DIFF" >> "$GITHUB_OUTPUT"
+          echo "Base: $BASE -> PR: $PR (diff: $DIFF)"
+          if [ "$DIFF" -lt 0 ]; then
+            echo "Score regressed by $DIFF points"
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Score maintained or improved (+$DIFF)"
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        env:
+          BASE: ${{ steps.compare.outputs.base }}
+          PR: ${{ steps.compare.outputs.pr }}
+          DIFF: ${{ steps.compare.outputs.diff }}
+        with:
+          script: |
+            const base = Number(process.env.BASE);
+            const pr = Number(process.env.PR);
+            const diff = Number(process.env.DIFF);
+            const direction = diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat';
+            const status = diff < 0 ? 'Regression' : diff > 0 ? 'Improved' : 'No change';
+
+            const body = [
+              `## React Doctor: ${pr}/100 (${direction})`,
+              '',
+              `| Base | PR | Change |`,
+              `|------|-----|--------|`,
+              `| ${base} | ${pr} | ${diff >= 0 ? '+' : ''}${diff} |`,
+              '',
+              status,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body?.includes('React Doctor:'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail if score regressed
+        if: steps.compare.outputs.failed == 'true'
+        env:
+          BASE: ${{ steps.compare.outputs.base }}
+          PR: ${{ steps.compare.outputs.pr }}
+        run: |
+          echo "::error::React Doctor score dropped from $BASE to $PR"
+          exit 1

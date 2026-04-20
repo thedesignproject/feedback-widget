@@ -19,16 +19,15 @@ jobs:
     name: consumer-smoke (react ${{ matrix.react }})
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version-file: .nvmrc
-          cache: npm
-      - run: npm ci
-      - run: npm run build
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run build
       - name: Pack tarball
         id: pack
         run: |
-          TARBALL=$(npm pack --silent)
+          TARBALL=$(bun pm pack | tail -1)
           echo "path=$(pwd)/$TARBALL" >> "$GITHUB_OUTPUT"
       - name: Build consumer app against React ${{ matrix.react }}
         env:
@@ -68,14 +67,14 @@ jobs:
             "include": ["index.tsx"]
           }
           JSON
-          npm install --no-audit --no-fund \
+          bun add \
             "react@$REACT_MAJOR" \
             "react-dom@$REACT_MAJOR" \
             "@types/react@$REACT_MAJOR" \
             "@types/react-dom@$REACT_MAJOR" \
             typescript
-          npm install --no-audit --no-fund "$TARBALL"
-          npx tsc --noEmit
+          bun add "$TARBALL"
+          bunx tsc --noEmit
 
   publish:
     needs: consumer-smoke
@@ -85,21 +84,26 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      # setup-node is kept solely for the final `npm publish` step — Bun can
+      # install and build, but `npm publish --provenance` with GitHub's OIDC
+      # story is the reliable publish path.
       - uses: actions/setup-node@v6
         with:
           node-version-file: .nvmrc
           registry-url: 'https://registry.npmjs.org'
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build
       - name: Verify tag matches package.json version
         env:
           GITHUB_REF: ${{ github.ref }}
         run: |
           TAG_VERSION="${GITHUB_REF#refs/tags/v}"
-          PKG_VERSION=$(node -p "require('./package.json').version")
+          PKG_VERSION=$(bun -p "require('./package.json').version")
           if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
             echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
             exit 1
