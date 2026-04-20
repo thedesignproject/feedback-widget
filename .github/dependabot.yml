@@ -29,19 +29,3 @@ updates:
           - patch
       production-dependencies:
         dependency-type: production
-    # The Vite 8 + vitest 4 + plugin-react 6 stack moves together. Bumping
-    # one without the others fails peer resolution. Defer the whole quartet
-    # until we schedule the migration (see closed #26 / #27 / #32).
-    ignore:
-      - dependency-name: vite
-        update-types:
-          - version-update:semver-major
-      - dependency-name: "@vitejs/plugin-react"
-        update-types:
-          - version-update:semver-major
-      - dependency-name: vitest
-        update-types:
-          - version-update:semver-major
-      - dependency-name: "@vitest/coverage-v8"
-        update-types:
-          - version-update:semver-major
