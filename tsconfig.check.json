@@ -7,7 +7,6 @@
     "outDir": null,
     "rootDir": ".",
     "types": ["node"],
-    "baseUrl": ".",
     "paths": {
       "feedback-widget": ["./src/index.ts"]
     }
