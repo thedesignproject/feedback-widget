@@ -17,6 +17,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (req.method === 'GET') return handleGet(req, res, supabase)
   if (req.method === 'POST') return handlePost(req, res, supabase)
+  if (req.method === 'DELETE') return handleDelete(req, res, supabase)
 
   return res.status(405).json({ error: 'Method not allowed' })
 }
@@ -54,13 +55,51 @@ async function handlePost(req: VercelRequest, res: VercelResponse, supabase: Sup
     return res.status(400).json({ error: 'x and y must be finite numbers' })
   }
 
-  const { error } = await supabase.from('comments').insert([
-    { project_id: projectId, url, x, y, element, comment },
-  ] as never)
+  // .select() forces Prefer: return=representation so the server sends
+  // back the inserted row — or a 4xx if RLS blocked the write. Without
+  // it, insert() uses Prefer: return=minimal and silently reports
+  // success even when no row was stored.
+  const { data, error } = await supabase
+    .from('comments')
+    .insert([{ project_id: projectId, url, x, y, element, comment }] as never)
+    .select()
 
   if (error) {
     return res.status(500).json({ error: error.message })
   }
 
+  if (!data || data.length === 0) {
+    return res.status(500).json({ error: 'Insert returned no row' })
+  }
+
+  return res.status(200).json({ success: true })
+}
+
+// DELETE is intentionally narrow: it only exists so the Smoke workflow can clean
+// up its own probe rows after a round-trip. It requires a shared secret header
+// AND a projectId scope — there is no way to delete anything else through it.
+async function handleDelete(req: VercelRequest, res: VercelResponse, supabase: SupabaseClient) {
+  const cleanupToken = process.env.SMOKE_CLEANUP_TOKEN
+  if (!cleanupToken) {
+    return res.status(501).json({ error: 'DELETE disabled: SMOKE_CLEANUP_TOKEN not configured' })
+  }
+
+  const presented = req.headers['x-smoke-cleanup-token']
+  if (typeof presented !== 'string' || presented !== cleanupToken) {
+    return res.status(401).json({ error: 'Unauthorized' })
+  }
+
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+  if (!projectId) {
+    return res.status(400).json({ error: 'Missing required query param: projectId' })
+  }
+  if (!projectId.startsWith('smoke-')) {
+    return res.status(400).json({ error: 'DELETE is scoped to smoke-* projectIds only' })
+  }
+
+  const { error } = await supabase.from('comments').delete().eq('project_id', projectId)
+  if (error) {
+    return res.status(500).json({ error: error.message })
+  }
   return res.status(200).json({ success: true })
 }

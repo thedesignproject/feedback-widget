@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        react: ['18', '19']
+    name: check (react ${{ matrix.react }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Install React ${{ matrix.react }}
+        run: |
+          npm install --no-save \
+            react@${{ matrix.react }} \
+            react-dom@${{ matrix.react }} \
+            @types/react@${{ matrix.react }} \
+            @types/react-dom@${{ matrix.react }}
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - run: npm run build
+      - name: Enforce bundle size ceiling
+        run: |
+          SIZE=$(wc -c < dist/feedback-widget.es.js | tr -d ' ')
+          MAX=51200
+          echo "dist/feedback-widget.es.js: $SIZE bytes (max $MAX)"
+          if [ "$SIZE" -gt "$MAX" ]; then
+            echo "::error::Bundle exceeds size ceiling"
+            exit 1
+          fi
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # We gate on advisories in shipped runtime code (dependencies + peerDeps),
+      # not in the dev toolchain. @vercel/node pulls transitive build-tools with
+      # open advisories that its own latest release hasn't yet dropped; blocking
+      # merges on that churn would be dishonest. Dev-tree hygiene is tracked via
+      # Dependabot (.github/dependabot.yml).
+      - name: npm audit (runtime only, high + critical)
+        run: npm audit --omit=dev --audit-level=high
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks (pinned by sha256)
+        env:
+          GITLEAKS_VERSION: '8.28.0'
+          GITLEAKS_SHA256: 'a65b5253807a68ac0cafa4414031fd740aeb55f54fb7e55f386acb52e6a840eb'
+        run: |
+          set -euo pipefail
+          URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSL "$URL" -o /tmp/gitleaks.tgz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/
+          gitleaks version
+      - name: Scan for committed secrets
+        run: gitleaks detect --source . --redact --verbose --exit-code 1

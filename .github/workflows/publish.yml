@@ -1,0 +1,109 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # Build a tarball exactly as consumers will receive it from npm, install it
+  # into a throwaway React app on each supported React major, and build. Catches
+  # exports / peerDependencies / types mistakes that an in-repo test suite
+  # cannot — they only surface from outside the monorepo.
+  consumer-smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        react: ['18', '19']
+    name: consumer-smoke (react ${{ matrix.react }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack tarball
+        id: pack
+        run: |
+          TARBALL=$(npm pack --silent)
+          echo "path=$(pwd)/$TARBALL" >> "$GITHUB_OUTPUT"
+      - name: Build consumer app against React ${{ matrix.react }}
+        env:
+          TARBALL: ${{ steps.pack.outputs.path }}
+          REACT_MAJOR: ${{ matrix.react }}
+        run: |
+          set -euo pipefail
+          CONSUMER=$(mktemp -d)
+          cd "$CONSUMER"
+          cat > package.json <<'JSON'
+          {
+            "name": "consumer-smoke",
+            "private": true,
+            "version": "0.0.0",
+            "type": "module"
+          }
+          JSON
+          cat > index.tsx <<'TSX'
+          import { FeedbackWidget } from '@tosses/feedback-widget'
+          export default function App() {
+            return <FeedbackWidget projectId="smoke" apiBase="https://x" />
+          }
+          TSX
+          cat > tsconfig.json <<'JSON'
+          {
+            "compilerOptions": {
+              "target": "ES2020",
+              "module": "ESNext",
+              "moduleResolution": "bundler",
+              "jsx": "react-jsx",
+              "strict": true,
+              "skipLibCheck": true,
+              "noEmit": true,
+              "esModuleInterop": true,
+              "types": []
+            },
+            "include": ["index.tsx"]
+          }
+          JSON
+          npm install --no-audit --no-fund \
+            "react@$REACT_MAJOR" \
+            "react-dom@$REACT_MAJOR" \
+            "@types/react@$REACT_MAJOR" \
+            "@types/react-dom@$REACT_MAJOR" \
+            typescript
+          npm install --no-audit --no-fund "$TARBALL"
+          npx tsc --noEmit
+
+  publish:
+    needs: consumer-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Verify tag matches package.json version
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
