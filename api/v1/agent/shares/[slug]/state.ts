@@ -18,7 +18,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!project) return jsonError(req, res, 404, 'Project not found')
 
     const repoConfig = await getRepoConfig(project.publicKey)
-    const comments = await listCommentsForShare(authorized.share.id)
+    const comments = await listCommentsForShare(authorized.share)
     const revision = await getLatestShareRevision(authorized.share.id)
     const cutoff = new Date(Date.now() - 90_000).toISOString()
     const presence = await listLivePresence(authorized.share.id, cutoff)

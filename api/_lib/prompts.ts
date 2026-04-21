@@ -19,80 +19,76 @@ interface PromptInput {
   repoConfig: RepoConfig | null
 }
 
-function buildCommonBlock(input: PromptInput) {
-  const baseUrl = `${input.appUrl}/api/v1/agent/shares/${input.slug}`
-  const repoUrl = input.repoConfig?.repoUrl || 'Not configured'
-  const localPath = input.repoConfig?.localPath || 'Not configured'
-  const defaultBranch = input.repoConfig?.defaultBranch || 'main'
-  const installCommand = input.repoConfig?.installCommand || 'Not configured'
-  const devCommand = input.repoConfig?.devCommand || 'Not configured'
-  const testCommand = input.repoConfig?.testCommand || 'Not configured'
-  const buildCommand = input.repoConfig?.buildCommand || 'Not configured'
-  const extraInstructions = input.repoConfig?.agentInstructions || 'None'
+function buildBody(input: PromptInput) {
+  const base = input.appUrl.replace(/\/$/, '')
+  const bridge = `${base}/api/v1/agent/shares/${input.slug}`
+  const docUrl = `${base}/d/${input.slug}?token=${encodeURIComponent(input.token)}`
+  const skillUrl = `${base}/skill.md`
+  const docsUrl = `${base}/agent-docs`
+  const bugUrl = `${base}/api/bridge/report_bug`
+
+  const repoLines: string[] = []
+  if (input.repoConfig?.repoUrl || input.repoConfig?.localPath || input.repoConfig?.installCommand) {
+    repoLines.push('Project + repo:')
+    repoLines.push(`- Project: ${input.projectName} (${input.projectKey})`)
+    if (input.repoConfig?.localPath) repoLines.push(`- Local path: ${input.repoConfig.localPath}`)
+    if (input.repoConfig?.repoUrl) repoLines.push(`- Repo URL: ${input.repoConfig.repoUrl}`)
+    if (input.repoConfig?.defaultBranch) repoLines.push(`- Default branch: ${input.repoConfig.defaultBranch}`)
+    if (input.repoConfig?.installCommand) repoLines.push(`- Install: ${input.repoConfig.installCommand}`)
+    if (input.repoConfig?.devCommand) repoLines.push(`- Dev: ${input.repoConfig.devCommand}`)
+    if (input.repoConfig?.testCommand) repoLines.push(`- Test: ${input.repoConfig.testCommand}`)
+    if (input.repoConfig?.buildCommand) repoLines.push(`- Build: ${input.repoConfig.buildCommand}`)
+    if (input.repoConfig?.agentInstructions) repoLines.push(`- Extra: ${input.repoConfig.agentInstructions}`)
+    if (input.pageUrl) repoLines.push(`- Scoped page: ${input.pageUrl}`)
+  } else {
+    repoLines.push(`Project: ${input.projectName} (${input.projectKey})`)
+    if (input.pageUrl) repoLines.push(`Scoped page: ${input.pageUrl}`)
+  }
 
   return [
-    `Project: ${input.projectName} (${input.projectKey})`,
+    'Feedback Widget is a visual feedback system: humans drop comments pinned to real pixels on live pages, and you implement the accepted ones.',
     '',
-    'Repo:',
-    `- Local path: ${localPath}`,
-    `- Repo URL: ${repoUrl}`,
-    `- Default branch: ${defaultBranch}`,
+    'Join this session immediately so the human can see your presence:',
+    docUrl,
     '',
-    'Commands:',
-    `- Install: ${installCommand}`,
-    `- Dev: ${devCommand}`,
-    `- Test: ${testCommand}`,
-    `- Build: ${buildCommand}`,
+    '1. Announce your presence. Read token from the URL above.',
+    `   POST ${bridge}/presence`,
+    '   Authorization: Bearer <token>   (or X-Share-Token: <token>, or ?token=<token>)',
+    '   X-Agent-Id: <stable-agent-id>',
+    '   Body: {"status":"reading","summary":"Connecting"}',
     '',
-    'Feedback session:',
-    `- Page URL: ${input.pageUrl || 'Selection-scoped share'}`,
-    `- State URL: ${baseUrl}/state`,
-    `- Events URL: ${baseUrl}/events`,
-    `- Presence URL: ${baseUrl}/presence`,
-    `- Ops URL: ${baseUrl}/ops`,
-    `- Bearer token: ${input.token}`,
+    '2. Read state and reply: Connected to Feedback Widget and ready.',
+    `   GET ${bridge}/state`,
     '',
-    'Workflow:',
-    '1. Fetch state with the bearer token.',
-    '2. Post presence immediately when connected.',
-    '3. Only work on comments whose reviewStatus is accepted.',
-    '4. Claim before editing.',
-    '5. If blocked, send comment.block with a short note.',
-    '6. When done, send comment.complete with a validation note.',
-    '7. Never change reviewStatus.',
-    '8. Refresh state before starting the next item.',
+    '3. For deeper interaction, fetch:',
+    `   Skill: ${skillUrl}`,
+    `   Docs:  ${docsUrl}`,
     '',
-    `Extra project instructions: ${extraInstructions}`,
+    '4. If the API fails in a surprising way:',
+    `   POST ${bugUrl}`,
+    '   Include a short summary, raw request/response, and any request IDs.',
+    '',
+    'Working rules:',
+    '- Only work on comments whose reviewStatus is "accepted".',
+    '- Claim a comment before editing: POST /ops with op:"comment.claim" and Idempotency-Key.',
+    '- Report comment.start / comment.complete / comment.block as you work.',
+    '- Never change reviewStatus — humans own it; you own implementationStatus only.',
+    '- Refresh /state before starting the next item.',
+    '',
+    repoLines.join('\n'),
   ].join('\n')
 }
 
 export function buildPrompt(target: string, input: PromptInput) {
-  const common = buildCommonBlock(input)
+  const body = buildBody(input)
 
   if (target === 'claude-code') {
-    return [
-      'You are Claude Code working against a Feedback Widget agent share.',
-      '',
-      common,
-      '',
-      'Use the share endpoints as the source of truth while you work in the repo.',
-    ].join('\n')
+    return `You are Claude Code working on a Feedback Widget session.\n\n${body}`
   }
 
   if (target === 'codex') {
-    return [
-      'You are Codex working against a Feedback Widget agent share.',
-      '',
-      common,
-      '',
-      'Use the share endpoints as the source of truth while you work in the repo.',
-    ].join('\n')
+    return `You are Codex working on a Feedback Widget session.\n\n${body}`
   }
 
-  return [
-    'You are a coding agent working against a Feedback Widget agent share.',
-    '',
-    common,
-  ].join('\n')
+  return `You are a coding agent working on a Feedback Widget session.\n\n${body}`
 }
-

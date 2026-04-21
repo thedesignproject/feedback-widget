@@ -81,7 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
-    const inShare = await shareContainsComment(authorized.share.id, commentId)
+    const inShare = await shareContainsComment(authorized.share, commentId)
     if (!inShare) return jsonError(req, res, 404, 'Comment not found in share')
 
     const comment = await getComment(commentId)

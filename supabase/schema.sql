@@ -53,7 +53,7 @@ alter table comments
 create table if not exists feedback_shares (
   id uuid primary key default gen_random_uuid(),
   project_id text not null references projects(public_key) on delete cascade,
-  scope_type text not null check (scope_type in ('page', 'selection')),
+  scope_type text not null check (scope_type in ('page', 'selection', 'project')),
   scope_page_url text,
   slug text not null unique,
   access_token_hash text not null,
@@ -63,6 +63,16 @@ create table if not exists feedback_shares (
   revoked_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+-- Relax scope_type constraint on existing tables to allow 'project' scope
+-- (proof-style always-on project-wide share).
+alter table feedback_shares drop constraint if exists feedback_shares_scope_type_check;
+alter table feedback_shares add constraint feedback_shares_scope_type_check
+  check (scope_type in ('page', 'selection', 'project'));
+
+create unique index if not exists feedback_shares_one_project_scope_per_project
+  on feedback_shares (project_id)
+  where scope_type = 'project' and revoked_at is null;
 
 create table if not exists feedback_share_items (
   share_id uuid not null references feedback_shares(id) on delete cascade,

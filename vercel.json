@@ -7,6 +7,9 @@
       "maxDuration": 10
     }
   },
+  "rewrites": [
+    { "source": "/d/:slug", "destination": "/index.html" }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",

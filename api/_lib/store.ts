@@ -320,7 +320,7 @@ export async function updateImplementationStatus(commentId: string, patch: {
 
 export async function createShare(input: {
   projectKey: string
-  scopeType: 'page' | 'selection'
+  scopeType: 'page' | 'selection' | 'project'
   scopePageUrl: string | null
   slug: string
   accessTokenHash: string
@@ -398,12 +398,22 @@ export async function listShareCommentIds(shareId: string) {
   return (data || []).map((row) => String((row as { comment_id: string }).comment_id))
 }
 
-export async function shareContainsComment(shareId: string, commentId: string) {
+export async function shareContainsComment(
+  share: { id: string; projectId: string; scopeType: 'page' | 'selection' | 'project' },
+  commentId: string,
+) {
+  if (share.scopeType === 'project') {
+    const comment = await getComment(commentId)
+    if (!comment) return false
+    if (comment.projectId !== share.projectId) return false
+    return comment.reviewStatus === 'accepted'
+  }
+
   const supabase = getSupabase()
   const { data, error } = await supabase
     .from('feedback_share_items')
     .select('comment_id')
-    .eq('share_id', shareId)
+    .eq('share_id', share.id)
     .eq('comment_id', commentId)
     .maybeSingle()
 
@@ -411,8 +421,17 @@ export async function shareContainsComment(shareId: string, commentId: string) {
   return Boolean(data)
 }
 
-export async function listCommentsForShare(shareId: string) {
-  const commentIds = await listShareCommentIds(shareId)
+export async function listCommentsForShare(share: {
+  id: string
+  projectId: string
+  scopeType: 'page' | 'selection' | 'project'
+  scopePageUrl: string | null
+}) {
+  if (share.scopeType === 'project') {
+    return listAcceptedCommentsForProject(share.projectId)
+  }
+
+  const commentIds = await listShareCommentIds(share.id)
   if (commentIds.length === 0) return []
 
   const supabase = getSupabase()
@@ -424,6 +443,33 @@ export async function listCommentsForShare(shareId: string) {
 
   if (error) throw new Error(error.message)
   return (data || []).map((row) => mapComment(row as CommentRow))
+}
+
+export async function listAcceptedCommentsForProject(projectKey: string) {
+  const supabase = getSupabase()
+  const { data, error } = await supabase
+    .from('comments')
+    .select('id, project_id, url, x, y, element, comment, status, implementation_status, claimed_by_agent_id, created_at, updated_at')
+    .eq('project_id', projectKey)
+    .eq('status', 'approved')
+    .order('created_at', { ascending: false })
+
+  if (error) throw new Error(error.message)
+  return (data || []).map((row) => mapComment(row as CommentRow))
+}
+
+export async function getProjectShare(projectKey: string) {
+  const supabase = getSupabase()
+  const { data, error } = await supabase
+    .from('feedback_shares')
+    .select('id, project_id, scope_type, scope_page_url, slug, access_token_hash, access_token_ciphertext, created_by, expires_at, revoked_at, created_at')
+    .eq('project_id', projectKey)
+    .eq('scope_type', 'project')
+    .is('revoked_at', null)
+    .maybeSingle()
+
+  if (error) throw new Error(error.message)
+  return data ? mapShare(data as ShareRow) : null
 }
 
 export async function createFeedbackEvent(input: {
