@@ -4,8 +4,10 @@
   "workspaces": {
     "": {
       "name": "@thedesignproject/feedback-widget",
-      "devDependencies": {
+      "dependencies": {
         "@supabase/supabase-js": "^2.49.4",
+      },
+      "devDependencies": {
         "@testing-library/jest-dom": "^6.6.4",
         "@testing-library/react": "^16.3.0",
         "@testing-library/user-event": "^14.6.1",

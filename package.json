@@ -40,6 +40,9 @@
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.4"
+  },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.4",
     "@testing-library/react": "^16.3.0",
@@ -47,7 +50,6 @@
     "@types/node": "^25.6.0",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
-    "@supabase/supabase-js": "^2.49.4",
     "@vercel/node": "^5.7.12",
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/coverage-v8": "^4.1.4",
