@@ -5,7 +5,7 @@ import { getSelector } from '../lib/getSelector'
 
 interface FeedbackWidgetProps {
   projectId: string
-  apiBase: string
+  apiBase?: string
 }
 
 type Mode = 'idle' | 'selecting' | 'commenting'
@@ -50,7 +50,9 @@ function timeAgo(date: string): string {
   return `${days}d ago`
 }
 
-export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
+const DEFAULT_API_BASE = 'https://feedback-widget-sigma.vercel.app/api'
+
+export function FeedbackWidget({ projectId, apiBase = DEFAULT_API_BASE }: FeedbackWidgetProps) {
   const [mode, setMode] = useState<Mode>('idle')
   const [target, setTarget] = useState<ClickTarget | null>(null)
   const [comment, setComment] = useState('')
