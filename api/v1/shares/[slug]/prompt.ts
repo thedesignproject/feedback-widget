@@ -40,7 +40,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       slug: authorized.share.slug,
       target,
       prompt,
-      docUrl: `${base}/d/${authorized.share.slug}?token=${encodeURIComponent(authorized.token)}`,
+      docUrl: `${base}/?fw_share=${encodeURIComponent(authorized.share.slug)}&token=${encodeURIComponent(authorized.token)}`,
     })
   } catch (error) {
     return jsonError(req, res, 500, error instanceof Error ? error.message : 'Unexpected error')

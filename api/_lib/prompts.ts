@@ -22,7 +22,7 @@ interface PromptInput {
 function buildBody(input: PromptInput) {
   const base = input.appUrl.replace(/\/$/, '')
   const bridge = `${base}/api/v1/agent/shares/${input.slug}`
-  const docUrl = `${base}/d/${input.slug}?token=${encodeURIComponent(input.token)}`
+  const docUrl = `${base}/?fw_share=${encodeURIComponent(input.slug)}&token=${encodeURIComponent(input.token)}`
   const skillUrl = `${base}/skill.md`
   const docsUrl = `${base}/agent-docs`
   const bugUrl = `${base}/api/bridge/report_bug`

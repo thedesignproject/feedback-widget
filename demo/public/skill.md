@@ -9,7 +9,7 @@ This file is the machine-readable contract for the agent bridge. Fetch it when y
 Every session has a `slug` and a bearer `token`. They are both in the URL you were handed:
 
 ```
-https://<host>/d/<slug>?token=<token>
+https://<host>/?fw_share=<slug>&token=<token>
 ```
 
 You can pass the token three ways — pick whichever is easiest:

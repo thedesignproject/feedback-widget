@@ -1,12 +1,18 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
-import { DocView } from './DocView'
 
-const isDocRoute = /^\/d\//.test(window.location.pathname)
+const legacyDocMatch = window.location.pathname.match(/^\/d\/([^/?#]+)/)
+if (legacyDocMatch) {
+  const search = new URLSearchParams(window.location.search)
+  const token = search.get('token') ?? ''
+  const next = new URLSearchParams({ fw_share: legacyDocMatch[1] })
+  if (token) next.set('token', token)
+  window.history.replaceState(null, '', `/?${next.toString()}`)
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {isDocRoute ? <DocView /> : <App />}
+    <App />
   </StrictMode>
 )

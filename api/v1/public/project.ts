@@ -47,7 +47,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const base = appUrl()
-    const docUrl = `${base}/d/${share.slug}?token=${encodeURIComponent(token)}`
+    const docUrl = `${base}/?fw_share=${encodeURIComponent(share.slug)}&token=${encodeURIComponent(token)}`
 
     setCors(req, res, ['GET', 'OPTIONS'])
     return res.status(200).json({
