@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../../../lib/shares', () => ({
+vi.mock('../../../../_lib/shares', () => ({
   requireAgentShare: vi.fn(async () => ({
     share: {
       id: 'share-1',
@@ -11,7 +11,7 @@ vi.mock('../../../../../lib/shares', () => ({
   })),
 }))
 
-vi.mock('../../../../../lib/store', () => ({
+vi.mock('../../../../_lib/store', () => ({
   createFeedbackEvent: vi.fn(async () => ({ id: 91 })),
   getComment: vi.fn(async () => ({
     id: 'comment-1',
@@ -32,7 +32,7 @@ import {
   createFeedbackEvent,
   saveOperationKey,
   updateImplementationStatus,
-} from '../../../../../lib/store'
+} from '../../../../_lib/store'
 
 interface MockRes {
   statusCode: number

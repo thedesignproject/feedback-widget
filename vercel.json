@@ -5,7 +5,7 @@
     "api/**/*.ts": {
       "memory": 128,
       "maxDuration": 10,
-      "includeFiles": "lib/**"
+      "includeFiles": "api/_lib/**"
     }
   },
   "headers": [

@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { requireReviewer } from '../../../lib/auth'
-import { createFeedbackEvent, createShare, addShareItems, listAcceptedCommentsByIds, listAcceptedCommentsForPage } from '../../../lib/store'
-import { generateAccessToken, generateSlug, hashToken, encryptToken } from '../../../lib/tokens'
-import { handleOptions, jsonError, methodNotAllowed, setCors } from '../../../lib/http'
+import { requireReviewer } from '../../_lib/auth'
+import { createFeedbackEvent, createShare, addShareItems, listAcceptedCommentsByIds, listAcceptedCommentsForPage } from '../../_lib/store'
+import { generateAccessToken, generateSlug, hashToken, encryptToken } from '../../_lib/tokens'
+import { handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http'
 
 function appUrl() {
   return process.env.APP_URL || 'http://localhost:3000'

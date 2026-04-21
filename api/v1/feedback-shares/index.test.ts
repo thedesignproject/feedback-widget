@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../../lib/auth', () => ({
+vi.mock('../../_lib/auth', () => ({
   requireReviewer: vi.fn(() => true),
 }))
 
-vi.mock('../../../lib/store', () => ({
+vi.mock('../../_lib/store', () => ({
   addShareItems: vi.fn(),
   createFeedbackEvent: vi.fn(),
   createShare: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock('../../../lib/store', () => ({
   listAcceptedCommentsForPage: vi.fn(),
 }))
 
-vi.mock('../../../lib/tokens', () => ({
+vi.mock('../../_lib/tokens', () => ({
   encryptToken: vi.fn(() => 'cipher'),
   generateAccessToken: vi.fn(() => 'token-123'),
   generateSlug: vi.fn(() => 'slug1234'),
@@ -26,7 +26,7 @@ import {
   createShare,
   listAcceptedCommentsByIds,
   listAcceptedCommentsForPage,
-} from '../../../lib/store'
+} from '../../_lib/store'
 
 interface MockRes {
   statusCode: number
