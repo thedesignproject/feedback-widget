@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../_lib/store', () => ({
+vi.mock('../../_lib/store.js', () => ({
   getProject: vi.fn(),
   createPublicComment: vi.fn(),
 }))
 
-import { createPublicComment, getProject } from '../../_lib/store'
-import handler from './comments'
+import { createPublicComment, getProject } from '../../_lib/store.js'
+import handler from './comments.js'
 
 interface MockRes {
   statusCode: number

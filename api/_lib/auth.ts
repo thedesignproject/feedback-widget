@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getReviewerToken, jsonError } from './http'
+import { getReviewerToken, jsonError } from './http.js'
 
 export function requireReviewer(req: VercelRequest, res: VercelResponse) {
   const configured = process.env.REVIEWER_API_TOKEN

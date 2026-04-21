@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { requireReviewer } from '../../../_lib/auth'
-import { createFeedbackEvent, findActiveSharesForComment, updateReviewStatus } from '../../../_lib/store'
-import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../_lib/http'
-import type { ReviewStatus } from '../../../_lib/status'
+import { requireReviewer } from '../../../_lib/auth.js'
+import { createFeedbackEvent, findActiveSharesForComment, updateReviewStatus } from '../../../_lib/store.js'
+import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../_lib/http.js'
+import type { ReviewStatus } from '../../../_lib/status.js'
 
 const VALID_STATUSES = new Set<ReviewStatus>(['open', 'accepted', 'rejected'])
 

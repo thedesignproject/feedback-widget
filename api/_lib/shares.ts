@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getBearerToken, jsonError } from './http'
-import { getShareBySlug } from './store'
-import { hashToken } from './tokens'
+import { getBearerToken, jsonError } from './http.js'
+import { getShareBySlug } from './store.js'
+import { hashToken } from './tokens.js'
 
 export async function requireAgentShare(req: VercelRequest, res: VercelResponse, slug: string) {
   const token = getBearerToken(req)

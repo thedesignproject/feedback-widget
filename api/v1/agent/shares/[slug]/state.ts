@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../../_lib/http'
-import { getLatestShareRevision, getProject, getRepoConfig, listCommentsForShare, listLivePresence } from '../../../../_lib/store'
-import { requireAgentShare } from '../../../../_lib/shares'
+import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../../_lib/http.js'
+import { getLatestShareRevision, getProject, getRepoConfig, listCommentsForShare, listLivePresence } from '../../../../_lib/store.js'
+import { requireAgentShare } from '../../../../_lib/shares.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleOptions(req, res, ['GET', 'OPTIONS'])) return

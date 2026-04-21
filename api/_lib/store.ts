@@ -1,5 +1,5 @@
-import { getSupabase } from './supabase'
-import { fromLegacyStatus, toLegacyStatus, type ImplementationStatus, type ReviewStatus } from './status'
+import { getSupabase } from './supabase.js'
+import { fromLegacyStatus, toLegacyStatus, type ImplementationStatus, type ReviewStatus } from './status.js'
 
 type CommentRow = {
   id: string

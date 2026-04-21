@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { createPublicComment, getProject } from '../../_lib/store'
-import { handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http'
+import { createPublicComment, getProject } from '../../_lib/store.js'
+import { handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleOptions(req, res, ['POST', 'OPTIONS'])) return

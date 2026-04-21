@@ -5,7 +5,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }))
 
 import { createClient } from '@supabase/supabase-js'
-import handler from './comments'
+import handler from './comments.js'
 
 interface MockRes {
   statusCode: number

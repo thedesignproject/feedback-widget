@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { requireReviewer } from '../../_lib/auth'
-import { handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http'
-import { listProjects } from '../../_lib/store'
+import { requireReviewer } from '../../_lib/auth.js'
+import { handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
+import { listProjects } from '../../_lib/store.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleOptions(req, res, ['GET', 'OPTIONS'])) return

@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { requireReviewer } from '../../../_lib/auth'
-import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../_lib/http'
-import { listComments } from '../../../_lib/store'
-import type { ImplementationStatus, ReviewStatus } from '../../../_lib/status'
+import { requireReviewer } from '../../../_lib/auth.js'
+import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../_lib/http.js'
+import { listComments } from '../../../_lib/store.js'
+import type { ImplementationStatus, ReviewStatus } from '../../../_lib/status.js'
 
 const REVIEW_STATUSES = new Set<ReviewStatus>(['open', 'accepted', 'rejected'])
 const IMPLEMENTATION_STATUSES = new Set<ImplementationStatus>(['unassigned', 'claimed', 'in_progress', 'blocked', 'done'])
