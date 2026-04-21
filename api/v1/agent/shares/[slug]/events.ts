@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../../_lib/http'
-import { listFeedbackEvents } from '../../../../_lib/store'
-import { requireAgentShare } from '../../../../_lib/shares'
+import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../../../lib/http'
+import { listFeedbackEvents } from '../../../../../lib/store'
+import { requireAgentShare } from '../../../../../lib/shares'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleOptions(req, res, ['GET', 'OPTIONS'])) return

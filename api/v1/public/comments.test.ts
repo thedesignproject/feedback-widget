@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../../_lib/store', () => ({
+vi.mock('../../../lib/store', () => ({
   getProject: vi.fn(),
   createPublicComment: vi.fn(),
 }))
 
-import { createPublicComment, getProject } from '../../_lib/store'
+import { createPublicComment, getProject } from '../../../lib/store'
 import handler from './comments'
 
 interface MockRes {

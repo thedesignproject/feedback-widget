@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getAgentId, getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../../_lib/http'
-import { createFeedbackEvent, getComment, getOperationKey, saveOperationKey, shareContainsComment, updateImplementationStatus } from '../../../../_lib/store'
-import { requireAgentShare } from '../../../../_lib/shares'
-import type { ImplementationStatus } from '../../../../_lib/status'
+import { getAgentId, getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../../../lib/http'
+import { createFeedbackEvent, getComment, getOperationKey, saveOperationKey, shareContainsComment, updateImplementationStatus } from '../../../../../lib/store'
+import { requireAgentShare } from '../../../../../lib/shares'
+import type { ImplementationStatus } from '../../../../../lib/status'
 
 type AgentOp = 'comment.claim' | 'comment.start' | 'comment.note' | 'comment.block' | 'comment.complete' | 'comment.reopen'
 
