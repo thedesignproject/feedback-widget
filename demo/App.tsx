@@ -3,7 +3,7 @@ import { FeedbackWidget } from 'feedback-widget'
 const apiBase = import.meta.env.VITE_API_BASE
 const projectId = import.meta.env.VITE_PROJECT_ID
 if (!apiBase || !projectId) {
-  throw new Error('VITE_API_BASE and VITE_PROJECT_ID are required. Copy .env.example to .env and fill them in.')
+  console.warn('[feedback-widget] VITE_API_BASE and VITE_PROJECT_ID are not set — the widget will not be mounted.')
 }
 
 const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif'
@@ -472,7 +472,7 @@ export function App() {
         </footer>
       </div>
 
-      <FeedbackWidget projectId={projectId} apiBase={apiBase} />
+      {apiBase && projectId && <FeedbackWidget projectId={projectId} apiBase={apiBase} />}
     </div>
   )
 }
