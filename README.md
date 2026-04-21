@@ -1,87 +1,204 @@
 # @thedesignproject/feedback-widget
 
-Visual feedback tool for React projects. Your client visits their deployed URL, clicks any element, and leaves a comment. You see everything instantly.
+Visual feedback capture for React sites, plus a private reviewer console and a Proof-style agent bridge.
+
+## What changed
+
+This repo is no longer just "a widget that stores comments."
+
+It now has three product surfaces:
+
+- **Public widget** in `src/`
+  - capture feedback on any page
+  - submit comments to the public ingestion API
+- **Reviewer dashboard** in `apps/dashboard/`
+  - triage comments
+  - accept or reject feedback
+  - create agent shares
+  - copy prompts for Codex or Claude Code
+- **Agent bridge API** in `api/v1/`
+  - expose page-scoped or selection-scoped feedback to coding agents
+  - track presence, events, and implementation updates
+
+The old `/api/comments` route still exists as a compatibility path and for the smoke workflow. The new product flow uses `/api/v1/...`.
 
 ## Repo layout
 
-This repository contains two separate things:
+- `src/`
+  - published widget package
+- `apps/dashboard/`
+  - private reviewer UI
+- `demo/`
+  - public demo site for the widget
+- `api/`
+  - Vercel serverless API routes
+- `supabase/`
+  - schema and migrations
 
-- **`src/`** — the React library published to npm as `@thedesignproject/feedback-widget`. This is the product.
-- **`demo/` + `api/` + `supabase/`** — a live demo hosted on Vercel and a **reference implementation** of the backend the library expects. Copy these into your own project as a starting point; they are not part of the published library.
+## Public widget
 
-The library talks to *your* backend, not ours. Only `projectId` and `apiBase` cross the library's boundary.
-
-## Installation
+Install:
 
 ```bash
 bun add @thedesignproject/feedback-widget
 ```
 
-## Usage
+Usage:
 
-```jsx
+```tsx
 import { FeedbackWidget } from '@thedesignproject/feedback-widget'
 
 export default function App() {
   return (
-    <>
-      {/* your app */}
-      <FeedbackWidget
-        projectId="your-project-name"
-        apiBase="https://your-deployment.example.com/api"
-      />
-    </>
+    <FeedbackWidget
+      apiBase="https://your-deployment.example.com/api"
+      projectId="demo-project"
+    />
   )
 }
 ```
 
-### Props
+Props:
 
 | Prop | Type | Required | Description |
 | --- | --- | --- | --- |
-| `projectId` | `string` | yes | Namespace for comments. All comments are scoped by this value. |
-| `apiBase` | `string` | yes | Base URL of the backend that serves `GET /comments` and `POST /comments`. |
+| `apiBase` | `string` | yes | Base URL for the API deployment |
+| `projectId` | `string` | yes | Project public key used for comment capture |
+| `projectKey` | `string` | no | Explicit alias for `projectId` when you want to distinguish public key naming |
 
-## Backend setup (reference implementation)
+The widget is capture-only in production. It does not fetch the full project comment feed and it does not expose reviewer actions.
 
-The widget expects these HTTP endpoints at `apiBase`:
+## API surfaces
 
-- `GET /comments?projectId=…` → returns `Comment[]` ordered by newest first.
-- `POST /comments` with JSON body `{ projectId, url, x, y, element, comment }` → inserts a row and returns `{ success: true }`.
-- `PATCH /comments` with JSON body `{ id, status?, comment? }` → updates a comment (used by the reviewer sidebar for resolve / edit).
-- `DELETE /comments?id=<uuid>` → deletes a single comment (used by the reviewer sidebar).
-- `DELETE /comments?projectId=smoke-*` → bulk delete, token-gated for the CI smoke workflow only (see `SMOKE_CLEANUP_TOKEN`).
+### Public ingestion
 
-`api/comments.ts` in this repo implements both on a single Vercel serverless function backed by Supabase Postgres. To stand up a copy:
+```text
+POST /api/v1/public/comments
+```
 
-1. Create a Supabase project and run `supabase/schema.sql` to create the `comments` table.
-2. Enable Row Level Security on the `comments` table. With no policies defined, anon keys are denied everything by default — the API uses the `service_role` key which bypasses RLS.
-3. Deploy the `api/` functions (e.g. to Vercel). Set two environment variables on the deployment:
-   - `SUPABASE_URL` — your Supabase project URL.
-   - `SUPABASE_KEY` — the **service_role** key (Supabase Dashboard → Settings → API). This key bypasses RLS and must never ship to a browser. Do not prefix it with `VITE_`.
-4. Point the widget's `apiBase` prop at `https://<your-deployment>/api`.
+Request:
 
-This is one working setup, not the only one. Anything that implements the endpoints above (Next.js route handlers, Cloudflare Workers, a plain Express server) will work.
+```json
+{
+  "projectKey": "demo-project",
+  "pageUrl": "https://example.com/pricing",
+  "selector": "main > section:nth-of-type(2) button",
+  "x": 540,
+  "y": 220,
+  "body": "This CTA feels too weak"
+}
+```
 
-## Security
+### Reviewer API
 
-In v0, reviewer operations (`PATCH /comments` and `DELETE /comments?id=`) are **unauthenticated**. Anyone who can reach `apiBase` and knows a comment's UUID can edit or delete that row. The bulk `DELETE ?projectId=` path is gated by `SMOKE_CLEANUP_TOKEN` and scoped to `smoke-*` projectIds, so it cannot be used to wipe real projects.
+Protected by `REVIEWER_API_TOKEN`.
 
-Until proper reviewer auth lands, deploy reviewer UIs (the sidebar) behind your own authentication layer — do not expose them on public pages. Tracked in [issue #28](https://github.com/thedesignproject/feedback-widget/issues/28).
+```text
+GET   /api/v1/projects
+GET   /api/v1/projects/:projectId/comments
+PATCH /api/v1/comments/:commentId/review-status
+POST  /api/v1/feedback-shares
+GET   /api/v1/feedback-shares/:shareId/prompt
+```
 
-## Requirements
+### Agent bridge
 
-- React 18 or 19 on the consuming app.
-- A backend implementing the two endpoints above.
+Protected by per-share bearer token.
+
+```text
+GET  /api/v1/agent/shares/:slug/state
+GET  /api/v1/agent/shares/:slug/events
+POST /api/v1/agent/shares/:slug/presence
+POST /api/v1/agent/shares/:slug/ops
+```
+
+## Supabase schema
+
+Run `supabase/schema.sql`. It creates or updates:
+
+- `projects`
+- `project_repo_configs`
+- `comments`
+- `feedback_shares`
+- `feedback_share_items`
+- `feedback_events`
+- `agent_presence`
+- `feedback_operation_keys`
+
+The schema also seeds a `demo-project` project and repo config for local development.
+
+## Environment variables
+
+Example values live in `.env.example`.
+
+Required server variables:
+
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+- `REVIEWER_API_TOKEN`
+- `SHARE_TOKEN_SECRET`
+- `APP_URL`
+
+Useful client variables:
+
+- `VITE_API_BASE`
+- `VITE_PROJECT_ID`
+- `VITE_REVIEWER_TOKEN`
 
 ## Development
 
+Install:
+
 ```bash
 bun install
-bun run dev        # run the demo against a backend of your choice (configure via .env)
-bun run test       # run the handler unit tests (vitest)
-bun run typecheck  # run tsc across src/, api/, demo/
-bun run build      # produce the dist/ library artifacts
 ```
 
-CI runs typecheck + tests + build on every PR.
+Run the public demo:
+
+```bash
+bun run dev
+```
+
+Run the reviewer dashboard:
+
+```bash
+bun run dev:dashboard
+```
+
+Build the widget package:
+
+```bash
+bun run build
+```
+
+Build the dashboard:
+
+```bash
+bun run build:dashboard
+```
+
+Run tests:
+
+```bash
+bun run test
+```
+
+Typecheck everything:
+
+```bash
+bun run typecheck
+```
+
+## Compatibility
+
+The legacy route remains available:
+
+```text
+GET    /api/comments?projectId=...
+POST   /api/comments
+PATCH  /api/comments
+DELETE /api/comments
+```
+
+That path is kept for backward compatibility and smoke validation. New product work should target `/api/v1/...`.
+
