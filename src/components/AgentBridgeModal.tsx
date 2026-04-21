@@ -46,6 +46,17 @@ const WIDGET_ATTR = 'data-fw'
 const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif'
 const mono = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
 
+function timeAgo(iso: string) {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000))
+  if (seconds < 5) return 'just now'
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
 function readShareFromUrl() {
   const search = new URLSearchParams(window.location.search)
   return {
@@ -70,6 +81,13 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
   const [state, setState] = useState<StateResponse | null>(null)
   const [copied, setCopied] = useState<Target | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [, setNow] = useState(0)
+
+  // Tick every 10s to keep "N seconds ago" labels fresh.
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow((n) => n + 1), 10000)
+    return () => window.clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -103,7 +121,7 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
     }
   }, [apiBase, projectId, session])
 
-  // Once we have a session, load prompts + state.
+  // Once we have a session, load prompts once.
   useEffect(() => {
     if (!session) return
 
@@ -120,9 +138,6 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
         )
         if (cancelled) return
         setPrompts(Object.fromEntries(promptEntries) as Record<Target, string>)
-
-        const stateRes = await fetch(`${apiBase}/v1/agent/shares/${session!.slug}/state?token=${encodeURIComponent(session!.token)}`)
-        if (stateRes.ok && !cancelled) setState((await stateRes.json()) as StateResponse)
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load session.')
       }
@@ -130,6 +145,28 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
     load()
     return () => {
       cancelled = true
+    }
+  }, [apiBase, session])
+
+  // Poll /state while the modal is open so presence + accepted comments stay live.
+  useEffect(() => {
+    if (!session) return
+
+    let cancelled = false
+    async function fetchState() {
+      try {
+        const res = await fetch(`${apiBase}/v1/agent/shares/${session!.slug}/state?token=${encodeURIComponent(session!.token)}`)
+        if (!res.ok || cancelled) return
+        setState((await res.json()) as StateResponse)
+      } catch {
+        // swallow transient network blips — next tick will retry
+      }
+    }
+    fetchState()
+    const interval = window.setInterval(fetchState, 4000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
     }
   }, [apiBase, session])
 
@@ -257,10 +294,11 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
             <Section label="Live agents">
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {state.presence.map((p) => (
-                  <div key={p.agentId} style={{ padding: '6px 10px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12 }}>
+                  <div key={p.agentId} style={{ padding: '6px 10px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ fontWeight: 700 }}>{p.agentId}</span>
-                    <span style={{ color: '#888', marginLeft: 6 }}>{p.status}</span>
-                    {p.summary && <span style={{ color: '#555', marginLeft: 6 }}>· {p.summary}</span>}
+                    <span style={{ color: '#888' }}>{p.status}</span>
+                    {p.summary && <span style={{ color: '#555' }}>· {p.summary}</span>}
+                    <span style={{ color: '#aaa', marginLeft: 'auto', fontSize: 11 }}>{timeAgo(p.lastSeenAt)}</span>
                   </div>
                 ))}
               </div>
