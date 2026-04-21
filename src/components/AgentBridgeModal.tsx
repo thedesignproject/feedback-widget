@@ -315,14 +315,16 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {acceptedComments.map((comment) => (
                     <div key={comment.id} style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 12 }}>
-                      <div style={{ display: 'flex', gap: 10 }}>
-                        <StatusPill status={comment.implementationStatus} />
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, color: '#111', lineHeight: 1.5, marginBottom: 4 }}>{comment.body}</div>
                           <div style={{ fontSize: 11, color: '#aaa', fontFamily: mono, wordBreak: 'break-all' }}>
                             {comment.pageUrl} · {comment.selector}
                           </div>
                         </div>
+                        {comment.implementationStatus !== 'unassigned' && (
+                          <StatusPill status={comment.implementationStatus} />
+                        )}
                       </div>
                     </div>
                   ))}
