@@ -30,6 +30,12 @@ interface StateResponse {
   }>
 }
 
+interface ProjectResponse {
+  projectKey: string
+  projectName: string
+  doc: { slug: string; token: string; docUrl: string; promptUrl: string }
+}
+
 const TARGETS: Array<{ id: Target; label: string; hint: string }> = [
   { id: 'claude-code', label: 'Claude Code', hint: 'Anthropic Claude Code CLI' },
   { id: 'codex', label: 'Codex', hint: 'OpenAI Codex CLI' },
@@ -50,13 +56,16 @@ function readShareFromUrl() {
 
 interface AgentBridgeModalProps {
   apiBase: string
+  projectId: string
   onClose: () => void
 }
 
-export function AgentBridgeModal({ apiBase, onClose }: AgentBridgeModalProps) {
-  const { slug, token } = useMemo(readShareFromUrl, [])
-  const hasShare = Boolean(slug && token)
+export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeModalProps) {
+  const urlShare = useMemo(readShareFromUrl, [])
 
+  const [session, setSession] = useState<{ slug: string; token: string } | null>(
+    urlShare.slug && urlShare.token ? urlShare : null,
+  )
   const [prompts, setPrompts] = useState<Record<Target, string>>({ 'claude-code': '', 'codex': '', 'generic': '' })
   const [state, setState] = useState<StateResponse | null>(null)
   const [copied, setCopied] = useState<Target | null>(null)
@@ -70,30 +79,59 @@ export function AgentBridgeModal({ apiBase, onClose }: AgentBridgeModalProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // Resolve a session: use URL params if present, otherwise auto-provision one for this project.
   useEffect(() => {
-    if (!hasShare) return
+    if (session) return
 
+    let cancelled = false
+    async function resolve() {
+      try {
+        const res = await fetch(`${apiBase}/v1/public/project?projectKey=${encodeURIComponent(projectId)}`)
+        if (!res.ok) {
+          const detail = await res.text().catch(() => '')
+          throw new Error(`Could not start a session (${res.status}) ${detail}`.trim())
+        }
+        const body = (await res.json()) as ProjectResponse
+        if (!cancelled) setSession({ slug: body.doc.slug, token: body.doc.token })
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not start a session.')
+      }
+    }
+    resolve()
+    return () => {
+      cancelled = true
+    }
+  }, [apiBase, projectId, session])
+
+  // Once we have a session, load prompts + state.
+  useEffect(() => {
+    if (!session) return
+
+    let cancelled = false
     async function load() {
       try {
         const promptEntries = await Promise.all(
           TARGETS.map(async ({ id }) => {
-            const res = await fetch(`${apiBase}/v1/shares/${slug}/prompt?token=${encodeURIComponent(token)}&target=${id}`)
+            const res = await fetch(`${apiBase}/v1/shares/${session!.slug}/prompt?token=${encodeURIComponent(session!.token)}&target=${id}`)
             if (!res.ok) throw new Error(`Prompt fetch failed (${res.status})`)
             const body = (await res.json()) as PromptResponse
             return [id, body.prompt] as const
           }),
         )
+        if (cancelled) return
         setPrompts(Object.fromEntries(promptEntries) as Record<Target, string>)
 
-        const stateRes = await fetch(`${apiBase}/v1/agent/shares/${slug}/state?token=${encodeURIComponent(token)}`)
-        if (stateRes.ok) setState((await stateRes.json()) as StateResponse)
+        const stateRes = await fetch(`${apiBase}/v1/agent/shares/${session!.slug}/state?token=${encodeURIComponent(session!.token)}`)
+        if (stateRes.ok && !cancelled) setState((await stateRes.json()) as StateResponse)
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Could not load session.')
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load session.')
       }
     }
-
     load()
-  }, [apiBase, hasShare, slug, token])
+    return () => {
+      cancelled = true
+    }
+  }, [apiBase, session])
 
   const handleCopy = useCallback(async (target: Target) => {
     const text = prompts[target]
@@ -109,6 +147,7 @@ export function AgentBridgeModal({ apiBase, onClose }: AgentBridgeModalProps) {
 
   const acceptedComments = state?.comments.filter((c) => c.reviewStatus === 'accepted') ?? []
   const openCount = state?.comments.filter((c) => c.reviewStatus === 'open').length ?? 0
+  const promptsReady = TARGETS.every(({ id }) => Boolean(prompts[id]))
 
   return (
     <div {...{ [WIDGET_ATTR]: '' }} style={{ fontFamily: font, color: '#111' }}>
@@ -168,92 +207,96 @@ export function AgentBridgeModal({ apiBase, onClose }: AgentBridgeModalProps) {
         </div>
 
         <div style={{ padding: 20, overflowY: 'auto' }}>
-          {!hasShare ? (
-            <EmptyState />
-          ) : (
-            <>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 20 }}>
-                {TARGETS.map(({ id, label, hint }) => {
-                  const ready = Boolean(prompts[id])
-                  const justCopied = copied === id
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => handleCopy(id)}
-                      disabled={!ready}
-                      style={{
-                        textAlign: 'left',
-                        padding: '12px 14px',
-                        background: justCopied ? '#0f172a' : '#fff',
-                        color: justCopied ? '#f8fafc' : '#111',
-                        border: `1px solid ${justCopied ? '#0f172a' : '#e5e5e5'}`,
-                        borderRadius: 10,
-                        cursor: ready ? 'pointer' : 'default',
-                        opacity: ready ? 1 : 0.55,
-                        transition: 'background 0.15s, border-color 0.15s, color 0.15s',
-                        fontFamily: font,
-                      }}
-                    >
-                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
-                        {justCopied ? 'Copied ✓' : `Copy ${label}`}
-                      </div>
-                      <div style={{ fontSize: 11, color: justCopied ? '#94a3b8' : '#888' }}>{hint}</div>
-                    </button>
-                  )
-                })}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 20 }}>
+            {TARGETS.map(({ id, label, hint }) => {
+              const ready = Boolean(prompts[id])
+              const justCopied = copied === id
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => handleCopy(id)}
+                  disabled={!ready}
+                  style={{
+                    textAlign: 'left',
+                    padding: '12px 14px',
+                    background: justCopied ? '#0f172a' : '#fff',
+                    color: justCopied ? '#f8fafc' : '#111',
+                    border: `1px solid ${justCopied ? '#0f172a' : '#e5e5e5'}`,
+                    borderRadius: 10,
+                    cursor: ready ? 'pointer' : 'default',
+                    opacity: ready ? 1 : 0.55,
+                    transition: 'background 0.15s, border-color 0.15s, color 0.15s',
+                    fontFamily: font,
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
+                    {justCopied ? 'Copied ✓' : ready ? `Copy ${label}` : label}
+                  </div>
+                  <div style={{ fontSize: 11, color: justCopied ? '#94a3b8' : '#888' }}>
+                    {ready ? hint : 'Loading…'}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {error && (
+            <div style={{ marginBottom: 16, padding: 10, borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
+              {error}
+            </div>
+          )}
+
+          {!error && !promptsReady && (
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 16 }}>
+              Starting a session…
+            </div>
+          )}
+
+          {state && state.presence.length > 0 && (
+            <Section label="Live agents">
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {state.presence.map((p) => (
+                  <div key={p.agentId} style={{ padding: '6px 10px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12 }}>
+                    <span style={{ fontWeight: 700 }}>{p.agentId}</span>
+                    <span style={{ color: '#888', marginLeft: 6 }}>{p.status}</span>
+                    {p.summary && <span style={{ color: '#555', marginLeft: 6 }}>· {p.summary}</span>}
+                  </div>
+                ))}
               </div>
+            </Section>
+          )}
 
-              {error && (
-                <div style={{ marginBottom: 16, padding: 10, borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: 12 }}>
-                  {error}
+          {state && (
+            <Section label={`Accepted feedback (${acceptedComments.length})`}>
+              {acceptedComments.length === 0 ? (
+                <div style={{ background: '#fafafa', border: '1px dashed #ddd', borderRadius: 10, padding: 16, textAlign: 'center', color: '#888', fontSize: 13 }}>
+                  No accepted comments yet. They'll show up here the moment a reviewer accepts one.
                 </div>
-              )}
-
-              {state && state.presence.length > 0 && (
-                <Section label="Live agents">
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {state.presence.map((p) => (
-                      <div key={p.agentId} style={{ padding: '6px 10px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12 }}>
-                        <span style={{ fontWeight: 700 }}>{p.agentId}</span>
-                        <span style={{ color: '#888', marginLeft: 6 }}>{p.status}</span>
-                        {p.summary && <span style={{ color: '#555', marginLeft: 6 }}>· {p.summary}</span>}
-                      </div>
-                    ))}
-                  </div>
-                </Section>
-              )}
-
-              <Section label={`Accepted feedback (${acceptedComments.length})`}>
-                {acceptedComments.length === 0 ? (
-                  <div style={{ background: '#fafafa', border: '1px dashed #ddd', borderRadius: 10, padding: 16, textAlign: 'center', color: '#888', fontSize: 13 }}>
-                    No accepted comments yet. They'll show up here the moment a reviewer accepts one.
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {acceptedComments.map((comment) => (
-                      <div key={comment.id} style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 12 }}>
-                        <div style={{ display: 'flex', gap: 10 }}>
-                          <StatusPill status={comment.implementationStatus} />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, color: '#111', lineHeight: 1.5, marginBottom: 4 }}>{comment.body}</div>
-                            <div style={{ fontSize: 11, color: '#aaa', fontFamily: mono, wordBreak: 'break-all' }}>
-                              {comment.pageUrl} · {comment.selector}
-                            </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {acceptedComments.map((comment) => (
+                    <div key={comment.id} style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 12 }}>
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <StatusPill status={comment.implementationStatus} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 13, color: '#111', lineHeight: 1.5, marginBottom: 4 }}>{comment.body}</div>
+                          <div style={{ fontSize: 11, color: '#aaa', fontFamily: mono, wordBreak: 'break-all' }}>
+                            {comment.pageUrl} · {comment.selector}
                           </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </Section>
-
-              {openCount > 0 && (
-                <div style={{ marginTop: 12, fontSize: 12, color: '#aaa' }}>
-                  {openCount} more comment{openCount === 1 ? '' : 's'} waiting on review.
+                    </div>
+                  ))}
                 </div>
               )}
-            </>
+            </Section>
+          )}
+
+          {state && openCount > 0 && (
+            <div style={{ marginTop: 12, fontSize: 12, color: '#aaa' }}>
+              {openCount} more comment{openCount === 1 ? '' : 's'} waiting on review.
+            </div>
           )}
         </div>
       </div>
@@ -276,33 +319,6 @@ function Section({ label, children }: { label: string; children: React.ReactNode
         {label}
       </div>
       {children}
-    </div>
-  )
-}
-
-function EmptyState() {
-  return (
-    <div style={{ textAlign: 'center', padding: '12px 4px 8px' }}>
-      <div style={{
-        width: 48, height: 48, borderRadius: 12, margin: '0 auto 14px',
-        background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#6b7280" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="11" width="18" height="10" rx="2" />
-          <circle cx="12" cy="5" r="2" />
-          <path d="M12 7v4" />
-          <line x1="8" y1="16" x2="8" y2="16" />
-          <line x1="16" y1="16" x2="16" y2="16" />
-        </svg>
-      </div>
-      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>No active session</div>
-      <p style={{ fontSize: 13, color: '#666', lineHeight: 1.55, maxWidth: 380, margin: '0 auto' }}>
-        To bring an agent into this page, create a share from the reviewer dashboard and open this page with the
-        resulting link. The "Copy prompt" buttons will appear here.
-      </p>
-      <div style={{ marginTop: 14, fontSize: 11, color: '#999', fontFamily: mono }}>
-        ?fw_share=&lt;slug&gt;&amp;token=&lt;token&gt;
-      </div>
     </div>
   )
 }

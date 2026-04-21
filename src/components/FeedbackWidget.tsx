@@ -1231,7 +1231,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       </div>
 
       {/* Agent bridge modal */}
-      {agentOpen && <AgentBridgeModal apiBase={apiBase} onClose={() => setAgentOpen(false)} />}
+      {agentOpen && <AgentBridgeModal apiBase={apiBase} projectId={projectId} onClose={() => setAgentOpen(false)} />}
 
       {/* Keyframes */}
       <style>{`
