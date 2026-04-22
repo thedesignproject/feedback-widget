@@ -61,7 +61,7 @@ Original finding: commit `858fe0c` contained a `.env` file with real credentials
 ### 5. Hardcoded API URL in distributed package
 **Status:** In PR #9. `apiBase` is now a **required** prop; no default. Demo reads `VITE_API_BASE` and `VITE_PROJECT_ID` from env.
 
-`src/components/FeedbackWidget.tsx:4` — `const API_BASE = 'https://feedback-widget-sigma.vercel.app/api'` is baked into the npm package. Every consumer sends user feedback to the maintainer's Vercel deployment with no way to override it.
+`src/components/FeedbackWidget.tsx` — `apiBase` is now a required prop. Consumers must point it to their own TDP deployment.
 
 **Action:** Expose `API_BASE` as a configurable prop.
 
