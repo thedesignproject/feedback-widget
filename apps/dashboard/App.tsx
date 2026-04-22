@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { cn } from './lib/utils'
 
 // ─── Types ──────────────────────────────────────────────────────────
@@ -41,14 +41,6 @@ interface AgentEvent {
   agentId: string
 }
 
-interface CommentCounts {
-  all: number
-  open: number
-  accepted: number
-  rejected: number
-  done: number
-}
-
 // ─── Fake Data ──────────────────────────────────────────────────────
 
 const PROJECTS: Project[] = [
@@ -57,6 +49,8 @@ const PROJECTS: Project[] = [
   { id: 'purespectrum', name: 'PureSpectrum', commentCount: 2 },
   { id: 'flint-studio', name: 'Flint Studio', commentCount: 0 },
 ]
+
+const AUTHOR_COLORS = ['#6366F1', '#8B5CF6', '#EC4899', '#F59E0B', '#10B981', '#0EA5E9']
 
 const FAKE_COMMENTS: Comment[] = [
   {
@@ -145,77 +139,27 @@ function truncateUrl(url: string) {
   return url.startsWith('/') ? url : url.replace(/^https?:\/\/[^/]+/, '')
 }
 
-// ─── Reducer ────────────────────────────────────────────────────────
-
-interface AppState {
-  selectedProject: string
-  statusFilter: StatusFilter
-  selectedCommentId: string
-  comments: Comment[]
-  sidebarOpen: boolean
-  tick: number
-}
-
-type AppAction =
-  | { type: 'select-project'; projectId: string }
-  | { type: 'select-filter'; filter: StatusFilter }
-  | { type: 'select-comment'; commentId: string }
-  | { type: 'set-review-status'; commentId: string; status: ReviewStatus }
-  | { type: 'toggle-sidebar' }
-  | { type: 'open-sidebar' }
-  | { type: 'tick' }
-
-const INITIAL_STATE: AppState = {
-  selectedProject: 'hubsync',
-  statusFilter: 'all',
-  selectedCommentId: '3',
-  comments: FAKE_COMMENTS,
-  sidebarOpen: true,
-  tick: 0,
-}
-
-function reducer(state: AppState, action: AppAction): AppState {
-  switch (action.type) {
-    case 'select-project':
-      return { ...state, selectedProject: action.projectId, statusFilter: 'all', selectedCommentId: '' }
-    case 'select-filter':
-      return { ...state, statusFilter: action.filter, selectedCommentId: '' }
-    case 'select-comment':
-      return { ...state, selectedCommentId: action.commentId }
-    case 'set-review-status':
-      return {
-        ...state,
-        comments: state.comments.map((c) =>
-          c.id === action.commentId
-            ? { ...c, reviewStatus: action.status, updatedAt: new Date().toISOString() }
-            : c,
-        ),
-      }
-    case 'toggle-sidebar':
-      return { ...state, sidebarOpen: !state.sidebarOpen }
-    case 'open-sidebar':
-      return { ...state, sidebarOpen: true }
-    case 'tick':
-      return { ...state, tick: state.tick + 1 }
-  }
-}
-
 // ─── App ────────────────────────────────────────────────────────────
 
 export function App() {
-  const [state, dispatch] = useReducer(reducer, INITIAL_STATE)
-  const { selectedProject, statusFilter, selectedCommentId, comments, sidebarOpen } = state
+  const [selectedProject, setSelectedProject] = useState('hubsync')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [selectedCommentId, setSelectedCommentId] = useState<string>('3')
+  const [comments, setComments] = useState(FAKE_COMMENTS)
+  const [agentConnected] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [, setTick] = useState(0)
 
-  // Refresh time-ago labels.
+  // Refresh time-ago labels
   useEffect(() => {
-    const t = setInterval(() => dispatch({ type: 'tick' }), 15000)
+    const t = setInterval(() => setTick((n) => n + 1), 15000)
     return () => clearInterval(t)
   }, [])
 
-  const projectComments = useMemo(
-    () => comments.filter((c) => c.projectId === selectedProject),
-    [comments, selectedProject],
-  )
+  // Filtered comments
+  const projectComments = useMemo(() =>
+    comments.filter((c) => c.projectId === selectedProject),
+  [comments, selectedProject])
 
   const filteredComments = useMemo(() => {
     if (statusFilter === 'all') return projectComments
@@ -225,7 +169,7 @@ export function App() {
 
   const selectedComment = comments.find((c) => c.id === selectedCommentId) ?? null
 
-  const counts: CommentCounts = useMemo(() => ({
+  const counts = useMemo(() => ({
     all: projectComments.length,
     open: projectComments.filter((c) => c.reviewStatus === 'open').length,
     accepted: projectComments.filter((c) => c.reviewStatus === 'accepted').length,
@@ -233,20 +177,21 @@ export function App() {
     done: projectComments.filter((c) => c.implementationStatus === 'done').length,
   }), [projectComments])
 
+  // Handlers
   const handleReviewStatus = useCallback((id: string, status: ReviewStatus) => {
-    dispatch({ type: 'set-review-status', commentId: id, status })
+    setComments((prev) => prev.map((c) => c.id === id ? { ...c, reviewStatus: status, updatedAt: new Date().toISOString() } : c))
   }, [])
 
   const selectedIdx = filteredComments.findIndex((c) => c.id === selectedCommentId)
 
   const goNext = useCallback(() => {
     const next = filteredComments[selectedIdx + 1]
-    if (next) dispatch({ type: 'select-comment', commentId: next.id })
+    if (next) setSelectedCommentId(next.id)
   }, [filteredComments, selectedIdx])
 
   const goPrev = useCallback(() => {
     const prev = filteredComments[selectedIdx - 1]
-    if (prev) dispatch({ type: 'select-comment', commentId: prev.id })
+    if (prev) setSelectedCommentId(prev.id)
   }, [filteredComments, selectedIdx])
 
   // Keyboard shortcuts
@@ -265,7 +210,7 @@ export function App() {
         if (e.key === 'o') handleReviewStatus(selectedComment.id, 'open')
       }
 
-      if (e.key === 's') dispatch({ type: 'toggle-sidebar' })
+      if (e.key === 's') setSidebarOpen((v) => !v)
     }
 
     window.addEventListener('keydown', onKey)
@@ -274,575 +219,459 @@ export function App() {
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
-      <TopHeader
-        projects={PROJECTS}
-        selectedProject={selectedProject}
-        onSelectProject={(id) => dispatch({ type: 'select-project', projectId: id })}
-      />
 
-      <div className="flex flex-1 overflow-hidden">
-        <CommentList
-          comments={filteredComments}
-          totalCount={counts.all}
-          counts={counts}
-          statusFilter={statusFilter}
-          selectedCommentId={selectedCommentId}
-          onSelectFilter={(f) => dispatch({ type: 'select-filter', filter: f })}
-          onSelectComment={(id) => dispatch({ type: 'select-comment', commentId: id })}
-        />
-
-        <CommentDetail
-          comment={selectedComment}
-          selectedIdx={selectedIdx}
-          totalFiltered={filteredComments.length}
-          onReviewStatus={handleReviewStatus}
-          onPrev={goPrev}
-          onNext={goNext}
-        />
-
-        {sidebarOpen && (
-          <AgentSidebar
-            events={FAKE_AGENT_EVENTS}
-            onClose={() => dispatch({ type: 'toggle-sidebar' })}
-          />
-        )}
-      </div>
-
-      <StatusBar
-        sidebarOpen={sidebarOpen}
-        onShowSidebar={() => dispatch({ type: 'open-sidebar' })}
-      />
-    </div>
-  )
-}
-
-// ─── TopHeader ──────────────────────────────────────────────────────
-
-interface TopHeaderProps {
-  projects: Project[]
-  selectedProject: string
-  onSelectProject: (id: string) => void
-}
-
-function TopHeader({ projects, selectedProject, onSelectProject }: TopHeaderProps) {
-  return (
-    <header className="flex items-center gap-3 px-5 h-[52px] shrink-0 border-b border-border bg-card">
-      <div className="flex items-center gap-2 mr-2">
-        <div className="w-6 h-6 rounded-md bg-primary flex items-center justify-center">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-primary-foreground">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2v10z" />
-          </svg>
+      {/* ── Top Header ── */}
+      <header className="flex items-center gap-3 px-5 h-[52px] shrink-0 border-b border-border bg-card">
+        {/* Logo */}
+        <div className="flex items-center gap-2 mr-2">
+          <div className="w-6 h-6 rounded-md bg-primary flex items-center justify-center">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-primary-foreground">
+              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2v10z" />
+            </svg>
+          </div>
+          <span className="text-sm font-bold tracking-tight text-foreground font-serif italic">feedback</span>
         </div>
-        <span className="text-sm font-bold tracking-tight text-foreground font-serif italic">feedback</span>
-      </div>
 
-      <div className="w-px h-5 bg-border" />
+        {/* Separator */}
+        <div className="w-px h-5 bg-border" />
 
-      <nav className="flex items-center gap-1 flex-1 overflow-auto">
-        {projects.map((p) => (
-          <button
-            key={p.id}
-            onClick={() => onSelectProject(p.id)}
-            className={cn(
-              'px-3 py-1.5 rounded-md text-xs font-semibold transition-all whitespace-nowrap',
-              selectedProject === p.id
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:text-foreground hover:bg-accent',
-            )}
-          >
-            {p.name}
-            {p.commentCount > 0 && (
-              <span className={cn(
-                'ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full',
-                selectedProject === p.id
-                  ? 'bg-primary-foreground/20 text-primary-foreground'
-                  : 'bg-muted text-muted-foreground',
-              )}>
-                {p.commentCount}
-              </span>
-            )}
-          </button>
-        ))}
-      </nav>
-
-      <div className="flex items-center gap-2 ml-auto">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-background text-muted-foreground text-xs w-48">
-          <SearchIcon />
-          <span>Search Feedback...</span>
-        </div>
-        <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary">
-          TO
-        </div>
-      </div>
-    </header>
-  )
-}
-
-// ─── CommentList ────────────────────────────────────────────────────
-
-interface CommentListProps {
-  comments: Comment[]
-  totalCount: number
-  counts: CommentCounts
-  statusFilter: StatusFilter
-  selectedCommentId: string
-  onSelectFilter: (filter: StatusFilter) => void
-  onSelectComment: (id: string) => void
-}
-
-const FILTER_OPTIONS: StatusFilter[] = ['all', 'open', 'accepted', 'rejected']
-
-function CommentList({ comments, totalCount, counts, statusFilter, selectedCommentId, onSelectFilter, onSelectComment }: CommentListProps) {
-  return (
-    <div className="w-[400px] shrink-0 flex flex-col border-r border-border bg-card">
-      <div className="px-4 pt-4 pb-2.5 border-b border-border">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base font-bold text-foreground tracking-tight">
-            {totalCount} Feedback Items
-          </h2>
-          <button className="text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
-            <CheckboxIcon /> Select
-          </button>
-        </div>
-        <div className="flex gap-1">
-          {FILTER_OPTIONS.map((f) => (
+        {/* Project Tabs */}
+        <nav className="flex items-center gap-1 flex-1 overflow-auto">
+          {PROJECTS.map((p) => (
             <button
-              key={f}
-              onClick={() => onSelectFilter(f)}
+              key={p.id}
+              onClick={() => { setSelectedProject(p.id); setStatusFilter('all'); setSelectedCommentId('') }}
               className={cn(
-                'px-2.5 py-1 rounded-md text-[11px] font-semibold capitalize transition-all',
-                statusFilter === f
+                'px-3 py-1.5 rounded-md text-xs font-semibold transition-all whitespace-nowrap',
+                selectedProject === p.id
                   ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-accent',
+                  : 'text-muted-foreground hover:text-foreground hover:bg-accent'
               )}
             >
-              {f} <span className="opacity-60 ml-0.5">{counts[f as keyof CommentCounts] ?? 0}</span>
+              {p.name}
+              {p.commentCount > 0 && (
+                <span className={cn(
+                  'ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full',
+                  selectedProject === p.id
+                    ? 'bg-primary-foreground/20 text-primary-foreground'
+                    : 'bg-muted text-muted-foreground'
+                )}>
+                  {p.commentCount}
+                </span>
+              )}
             </button>
           ))}
-        </div>
-      </div>
+        </nav>
 
-      <div className="flex-1 overflow-y-auto">
-        {comments.length === 0 ? (
-          <CommentListEmpty />
-        ) : (
-          <div className="animate-stagger">
-            {comments.map((comment) => (
-              <CommentListItem
-                key={comment.id}
-                comment={comment}
-                isActive={comment.id === selectedCommentId}
-                onSelect={onSelectComment}
-              />
-            ))}
+        {/* Header right */}
+        <div className="flex items-center gap-2 ml-auto">
+          {/* Search */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-background text-muted-foreground text-xs w-48">
+            <SearchIcon />
+            <span>Search Feedback...</span>
           </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function CommentListEmpty() {
-  return (
-    <div className="flex flex-col items-center justify-center h-full text-center px-8">
-      <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center mb-3">
-        <ChatIcon className="text-muted-foreground" />
-      </div>
-      <p className="text-sm font-semibold text-foreground mb-1">No comments</p>
-      <p className="text-xs text-muted-foreground">Nothing here yet for this filter.</p>
-    </div>
-  )
-}
-
-function CommentListItem({ comment, isActive, onSelect }: { comment: Comment; isActive: boolean; onSelect: (id: string) => void }) {
-  const borderColor =
-    comment.reviewStatus === 'accepted' ? 'border-l-status-accepted' :
-    comment.reviewStatus === 'rejected' ? 'border-l-status-rejected' :
-    'border-l-transparent'
-
-  return (
-    <button
-      onClick={() => onSelect(comment.id)}
-      className={cn(
-        'w-full text-left px-4 py-3.5 border-b border-border/50 border-l-[3px] card-hover',
-        borderColor,
-        isActive ? 'bg-accent' : 'hover:bg-accent/40',
-      )}
-    >
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[13px] font-semibold text-foreground">{comment.author}</span>
-        <span className="text-[11px] text-muted-foreground">{timeAgo(comment.createdAt)}</span>
-      </div>
-
-      <p className={cn(
-        'text-[13px] leading-relaxed mb-2.5 line-clamp-2',
-        comment.reviewStatus === 'rejected'
-          ? 'text-muted-foreground line-through'
-          : 'text-foreground/80',
-      )}>
-        {comment.body}
-      </p>
-
-      <div className="flex items-center gap-2 mb-2.5 text-[11px] text-muted-foreground font-mono">
-        <div
-          className="w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold text-white"
-          style={{ background: comment.authorColor }}
-        >
-          {comment.authorInitial}
-        </div>
-        <span className="truncate">{truncateUrl(comment.pageUrl)}</span>
-        <span className="text-border">·</span>
-        <span className="truncate">{comment.selector.split(' > ').pop()}</span>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <StatusBadge status={comment.reviewStatus} />
-        {comment.implementationStatus !== 'unassigned' && (
-          <ImplBadge status={comment.implementationStatus} />
-        )}
-        {comment.claimedByAgentId && (
-          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-status-in-progress">
-            <span className="w-1.5 h-1.5 rounded-full bg-status-in-progress animate-pulse-dot" />
-            {comment.claimedByAgentId}
-          </span>
-        )}
-      </div>
-    </button>
-  )
-}
-
-// ─── CommentDetail ──────────────────────────────────────────────────
-
-interface CommentDetailProps {
-  comment: Comment | null
-  selectedIdx: number
-  totalFiltered: number
-  onReviewStatus: (id: string, status: ReviewStatus) => void
-  onPrev: () => void
-  onNext: () => void
-}
-
-function CommentDetail({ comment, selectedIdx, totalFiltered, onReviewStatus, onPrev, onNext }: CommentDetailProps) {
-  return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-background">
-      {comment ? (
-        <>
-          <CommentDetailHeader comment={comment} />
-          <CommentDetailBody comment={comment} />
-          <CommentDetailActions
-            comment={comment}
-            selectedIdx={selectedIdx}
-            totalFiltered={totalFiltered}
-            onReviewStatus={onReviewStatus}
-            onPrev={onPrev}
-            onNext={onNext}
-          />
-        </>
-      ) : (
-        <CommentDetailEmpty />
-      )}
-    </div>
-  )
-}
-
-function CommentDetailHeader({ comment }: { comment: Comment }) {
-  return (
-    <div className="flex items-center justify-between px-6 h-[44px] shrink-0 border-b border-border bg-card">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="font-mono font-medium">#{comment.id}</span>
-        <span>·</span>
-        <span className="font-mono">{truncateUrl(comment.pageUrl)}</span>
-        <span>·</span>
-        <span className={cn(
-          'font-semibold',
-          comment.reviewStatus === 'accepted' ? 'text-status-accepted' :
-          comment.reviewStatus === 'rejected' ? 'text-status-rejected' :
-          'text-muted-foreground',
-        )}>
-          {comment.reviewStatus.charAt(0).toUpperCase() + comment.reviewStatus.slice(1)}
-        </span>
-        {comment.implementationStatus !== 'unassigned' && (
-          <>
-            <span>·</span>
-            <ImplBadge status={comment.implementationStatus} />
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function CommentDetailBody({ comment }: { comment: Comment }) {
-  return (
-    <div className="flex-1 overflow-y-auto">
-      <div key={comment.id} className="max-w-2xl mx-auto px-8 py-8 detail-enter">
-        <CommentScreenshot comment={comment} />
-
-        <div className="flex items-start gap-3 mb-8">
-          <div
-            className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-bold text-white"
-            style={{ background: comment.authorColor }}
-          >
-            {comment.authorInitial}
+          {/* Avatar */}
+          <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary">
+            TO
           </div>
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-sm font-semibold text-foreground">{comment.author}</span>
-              <span className="text-xs text-muted-foreground">{timeAgo(comment.createdAt)}</span>
+        </div>
+      </header>
+
+      {/* ── Main 3-panel layout ── */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ── Left Panel: Comment List ── */}
+        <div className="w-[400px] shrink-0 flex flex-col border-r border-border bg-card">
+
+          {/* List header */}
+          <div className="px-4 pt-4 pb-2.5 border-b border-border">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-base font-bold text-foreground tracking-tight">
+                {counts.all} Feedback Items
+              </h2>
+              <button className="text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1">
+                <CheckboxIcon /> Select
+              </button>
             </div>
-            <p className="text-[15px] leading-relaxed text-foreground">
-              {comment.body}
-            </p>
-            <div className="mt-2 text-xs font-mono text-muted-foreground">
-              {comment.selector}
+            {/* Filter pills */}
+            <div className="flex gap-1">
+              {(['all', 'open', 'accepted', 'rejected'] as StatusFilter[]).map((f) => {
+                const count = counts[f as keyof typeof counts] ?? 0
+                return (
+                  <button
+                    key={f}
+                    onClick={() => { setStatusFilter(f); setSelectedCommentId('') }}
+                    className={cn(
+                      'px-2.5 py-1 rounded-md text-[11px] font-semibold capitalize transition-all',
+                      statusFilter === f
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                    )}
+                  >
+                    {f} <span className="opacity-60 ml-0.5">{count}</span>
+                  </button>
+                )
+              })}
             </div>
           </div>
+
+          {/* Comment list */}
+          <div className="flex-1 overflow-y-auto">
+            {filteredComments.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full text-center px-8">
+                <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center mb-3">
+                  <ChatIcon className="text-muted-foreground" />
+                </div>
+                <p className="text-sm font-semibold text-foreground mb-1">No comments</p>
+                <p className="text-xs text-muted-foreground">Nothing here yet for this filter.</p>
+              </div>
+            ) : (
+              <div className="animate-stagger">
+              {filteredComments.map((comment) => {
+                const isActive = comment.id === selectedCommentId
+                const borderColor =
+                  comment.reviewStatus === 'accepted' ? 'border-l-status-accepted' :
+                  comment.reviewStatus === 'rejected' ? 'border-l-status-rejected' :
+                  'border-l-transparent'
+
+                return (
+                  <button
+                    key={comment.id}
+                    onClick={() => setSelectedCommentId(comment.id)}
+                    className={cn(
+                      'w-full text-left px-4 py-3.5 border-b border-border/50 border-l-[3px] card-hover',
+                      borderColor,
+                      isActive ? 'bg-accent' : 'hover:bg-accent/40'
+                    )}
+                  >
+                    {/* Row 1: Author + timestamp */}
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[13px] font-semibold text-foreground">{comment.author}</span>
+                      <span className="text-[11px] text-muted-foreground">{timeAgo(comment.createdAt)}</span>
+                    </div>
+
+                    {/* Row 2: Comment body (2-3 lines) */}
+                    <p className={cn(
+                      'text-[13px] leading-relaxed mb-2.5 line-clamp-2',
+                      comment.reviewStatus === 'rejected'
+                        ? 'text-muted-foreground line-through'
+                        : 'text-foreground/80'
+                    )}>
+                      {comment.body}
+                    </p>
+
+                    {/* Row 3: Metadata — avatar, page, selector */}
+                    <div className="flex items-center gap-2 mb-2.5 text-[11px] text-muted-foreground font-mono">
+                      <div
+                        className="w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold text-white"
+                        style={{ background: comment.authorColor }}
+                      >
+                        {comment.authorInitial}
+                      </div>
+                      <span className="truncate">{truncateUrl(comment.pageUrl)}</span>
+                      <span className="text-border">·</span>
+                      <span className="truncate">{comment.selector.split(' > ').pop()}</span>
+                    </div>
+
+                    {/* Row 4: Status badges */}
+                    <div className="flex items-center gap-2">
+                      <StatusBadge status={comment.reviewStatus} />
+                      {comment.implementationStatus !== 'unassigned' && (
+                        <ImplBadge status={comment.implementationStatus} />
+                      )}
+                      {comment.claimedByAgentId && (
+                        <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-status-in-progress">
+                          <span className="w-1.5 h-1.5 rounded-full bg-status-in-progress animate-pulse-dot" />
+                          {comment.claimedByAgentId}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                )
+              })}
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* ── Center Panel: Comment Detail ── */}
+        <div className="flex-1 flex flex-col overflow-hidden bg-background">
+          {selectedComment ? (
+            <>
+              {/* Detail header */}
+              <div className="flex items-center justify-between px-6 h-[44px] shrink-0 border-b border-border bg-card">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="font-mono font-medium">#{selectedComment.id}</span>
+                  <span>·</span>
+                  <span className="font-mono">{truncateUrl(selectedComment.pageUrl)}</span>
+                  <span>·</span>
+                  <span className={cn(
+                    'font-semibold',
+                    selectedComment.reviewStatus === 'accepted' ? 'text-status-accepted' :
+                    selectedComment.reviewStatus === 'rejected' ? 'text-status-rejected' :
+                    'text-muted-foreground'
+                  )}>
+                    {selectedComment.reviewStatus.charAt(0).toUpperCase() + selectedComment.reviewStatus.slice(1)}
+                  </span>
+                  {selectedComment.implementationStatus !== 'unassigned' && (
+                    <>
+                      <span>·</span>
+                      <ImplBadge status={selectedComment.implementationStatus} />
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Detail content */}
+              <div className="flex-1 overflow-y-auto">
+                <div key={selectedComment.id} className="max-w-2xl mx-auto px-8 py-8 detail-enter">
+
+                  {/* Screenshot placeholder */}
+                  <div className="relative rounded-xl border border-border bg-muted/40 overflow-hidden mb-8 aspect-video flex items-center justify-center">
+                    {/* Fake page wireframe */}
+                    <div className="w-full h-full bg-gradient-to-b from-card to-background p-6 relative">
+                      {/* Fake nav */}
+                      <div className="flex items-center justify-between mb-8">
+                        <div className="flex items-center gap-2">
+                          <div className="w-5 h-5 rounded bg-muted-foreground/15" />
+                          <div className="w-16 h-2.5 rounded bg-muted-foreground/12" />
+                        </div>
+                        <div className="flex gap-3">
+                          <div className="w-10 h-2 rounded bg-muted-foreground/8" />
+                          <div className="w-10 h-2 rounded bg-muted-foreground/8" />
+                          <div className="w-14 h-6 rounded-md bg-muted-foreground/12" />
+                        </div>
+                      </div>
+                      {/* Fake content */}
+                      <div className="flex gap-4">
+                        <div className="flex-1">
+                          <div className="w-3/4 h-3 rounded bg-muted-foreground/10 mb-2" />
+                          <div className="w-1/2 h-3 rounded bg-muted-foreground/10 mb-4" />
+                          <div className="w-full h-2 rounded bg-muted-foreground/6 mb-1.5" />
+                          <div className="w-5/6 h-2 rounded bg-muted-foreground/6 mb-1.5" />
+                          <div className="w-4/6 h-2 rounded bg-muted-foreground/6" />
+                        </div>
+                        <div className="w-24 h-24 rounded-lg bg-muted-foreground/6" />
+                      </div>
+
+                      {/* Pin marker */}
+                      <div
+                        className="absolute"
+                        style={{ left: `${(selectedComment.x / 700) * 100}%`, top: `${(selectedComment.y / 500) * 100}%` }}
+                      >
+                        <div className="relative">
+                          <svg width="28" height="36" viewBox="0 0 32 40" fill="none">
+                            <path d="M16 38c0 0-14-12.5-14-22a14 14 0 1128 0c0 9.5-14 22-14 22z" fill="#6366F1" stroke="#fff" strokeWidth="2" />
+                            <text x="16" y="20" textAnchor="middle" fill="#fff" fontSize="12" fontWeight="700" fontFamily="system-ui">
+                              {selectedComment.authorInitial}
+                            </text>
+                          </svg>
+                          <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-[#6366F1]/30 animate-pulse-dot" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Author + comment */}
+                  <div className="flex items-start gap-3 mb-8">
+                    <div
+                      className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                      style={{ background: selectedComment.authorColor }}
+                    >
+                      {selectedComment.authorInitial}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-sm font-semibold text-foreground">{selectedComment.author}</span>
+                        <span className="text-xs text-muted-foreground">{timeAgo(selectedComment.createdAt)}</span>
+                      </div>
+                      <p className="text-[15px] leading-relaxed text-foreground">
+                        {selectedComment.body}
+                      </p>
+                      <div className="mt-2 text-xs font-mono text-muted-foreground">
+                        {selectedComment.selector}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action bar */}
+              <div className="shrink-0 border-t border-border bg-card px-6 py-3">
+                <div className="flex items-center gap-2 max-w-2xl mx-auto">
+                  <ActionBtn
+                    active={selectedComment.reviewStatus === 'accepted'}
+                    variant="accept"
+                    onClick={() => handleReviewStatus(selectedComment.id, 'accepted')}
+                    shortcut="A"
+                  >
+                    <CheckIcon size={14} /> Accept
+                  </ActionBtn>
+                  <ActionBtn
+                    active={selectedComment.reviewStatus === 'rejected'}
+                    variant="reject"
+                    onClick={() => handleReviewStatus(selectedComment.id, 'rejected')}
+                    shortcut="R"
+                  >
+                    <XIcon size={14} /> Reject
+                  </ActionBtn>
+                  <ActionBtn
+                    variant="neutral"
+                    onClick={() => handleReviewStatus(selectedComment.id, 'open')}
+                    shortcut="O"
+                  >
+                    Re-open
+                  </ActionBtn>
+
+                  <div className="w-px h-5 bg-border mx-1" />
+
+                  <ActionBtn variant="neutral" onClick={() => window.open(selectedComment.pageUrl, '_blank')}>
+                    <ExternalLinkIcon size={13} /> Open page
+                  </ActionBtn>
+
+                  <div className="flex-1" />
+
+                  {/* Prev / Next */}
+                  <button
+                    onClick={goPrev}
+                    disabled={selectedIdx <= 0}
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  >
+                    <ChevronLeftIcon size={16} />
+                  </button>
+                  <span className="text-xs font-mono text-muted-foreground tabular-nums">
+                    {selectedIdx + 1}/{filteredComments.length}
+                  </span>
+                  <button
+                    onClick={goNext}
+                    disabled={selectedIdx >= filteredComments.length - 1}
+                    className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                  >
+                    <ChevronRightIcon size={16} />
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
+              <div className="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center mb-4">
+                <CursorIcon className="text-muted-foreground" />
+              </div>
+              <p className="text-base font-semibold text-foreground mb-1">Select a comment</p>
+              <p className="text-sm text-muted-foreground max-w-xs">
+                Pick a feedback item from the list to see the full context, screenshot, and actions.
+              </p>
+              <div className="flex gap-3 mt-6 text-xs text-muted-foreground font-mono">
+                <Kbd>J</Kbd><Kbd>K</Kbd> navigate
+                <span className="mx-1">·</span>
+                <Kbd>A</Kbd> accept
+                <span className="mx-1">·</span>
+                <Kbd>R</Kbd> reject
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Right Panel: Agent Sidebar ── */}
+        {sidebarOpen && (
+          <aside className="w-[300px] shrink-0 flex flex-col border-l border-border bg-sidebar overflow-y-auto animate-slide-in">
+            <div className="px-4 py-4 border-b border-sidebar-border">
+              <div className="flex items-center justify-between mb-1">
+                <h2 className="text-base font-bold text-foreground tracking-tight">Agent handoff</h2>
+                <button onClick={() => setSidebarOpen(false)} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
+                  <XIcon size={14} />
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">Proof-style agent bridge</p>
+            </div>
+
+            {/* Agent status */}
+            {agentConnected && (
+              <div className="px-4 py-3 border-b border-sidebar-border animate-fade-in">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="relative">
+                    <div className="w-2 h-2 rounded-full bg-agent-active animate-pulse-dot" />
+                    <div className="absolute inset-0 w-2 h-2 rounded-full animate-pulse-ring" />
+                  </div>
+                  <span className="text-[11px] font-bold text-agent-active uppercase tracking-wider">Live</span>
+                  <span className="text-[11px] text-muted-foreground">— Claude Code connected</span>
+                </div>
+
+                {/* Share URL */}
+                <div className="rounded-lg border border-border bg-card p-3 mb-3">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Share URL</p>
+                  <p className="text-[11px] font-mono text-foreground break-all leading-relaxed mb-2">
+                    feedbackwidget.com/shares/<wbr />4f4G-sf7y
+                  </p>
+                  <div className="flex gap-2">
+                    <button className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-background text-[11px] font-semibold text-foreground hover:bg-accent transition-colors">
+                      <CopyIcon size={11} /> Copy URL
+                    </button>
+                    <button className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-background text-[11px] font-semibold text-foreground hover:bg-accent transition-colors">
+                      <ExternalLinkIcon size={11} /> Open
+                    </button>
+                  </div>
+                </div>
+
+                {/* Agent card */}
+                <div className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-3 animate-scale-in">
+                  <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                    <BotIcon size={14} className="text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-foreground">claude-code</p>
+                    <p className="text-[11px] text-muted-foreground truncate">
+                      Editing components/Nav.tsx — adjusting breakpoints
+                    </p>
+                  </div>
+                  <div className="w-1.5 h-1.5 rounded-full bg-agent-active animate-pulse-dot shrink-0" />
+                </div>
+              </div>
+            )}
+
+            {/* Activity feed */}
+            <div className="px-4 py-3 flex-1">
+              <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-3">Activity</p>
+              <div className="space-y-0 animate-activity">
+                {FAKE_AGENT_EVENTS.map((ev) => (
+                  <div key={ev.id} className="flex gap-3 py-2 border-b border-border/40 last:border-0">
+                    <div className="mt-1.5 shrink-0">
+                      <div className={cn(
+                        'w-1.5 h-1.5 rounded-full',
+                        ev.type === 'resolve' ? 'bg-status-accepted' :
+                        ev.type === 'claim' ? 'bg-status-claimed' :
+                        ev.type === 'file' ? 'bg-status-in-progress' :
+                        'bg-muted-foreground/30'
+                      )} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[12px] text-foreground leading-snug">{ev.description}</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">{timeAgo(ev.timestamp)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
+        )}
       </div>
-    </div>
-  )
-}
 
-function CommentScreenshot({ comment }: { comment: Comment }) {
-  return (
-    <div className="relative rounded-xl border border-border bg-muted/40 overflow-hidden mb-8 aspect-video flex items-center justify-center">
-      <div className="w-full h-full bg-gradient-to-b from-card to-background p-6 relative">
-        {/* Fake nav */}
-        <div className="flex items-center justify-between mb-8">
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded bg-muted-foreground/15" />
-            <div className="w-16 h-2.5 rounded bg-muted-foreground/12" />
-          </div>
-          <div className="flex gap-3">
-            <div className="w-10 h-2 rounded bg-muted-foreground/8" />
-            <div className="w-10 h-2 rounded bg-muted-foreground/8" />
-            <div className="w-14 h-6 rounded-md bg-muted-foreground/12" />
-          </div>
-        </div>
-        {/* Fake content */}
-        <div className="flex gap-4">
-          <div className="flex-1">
-            <div className="w-3/4 h-3 rounded bg-muted-foreground/10 mb-2" />
-            <div className="w-1/2 h-3 rounded bg-muted-foreground/10 mb-4" />
-            <div className="w-full h-2 rounded bg-muted-foreground/6 mb-1.5" />
-            <div className="w-5/6 h-2 rounded bg-muted-foreground/6 mb-1.5" />
-            <div className="w-4/6 h-2 rounded bg-muted-foreground/6" />
-          </div>
-          <div className="w-24 h-24 rounded-lg bg-muted-foreground/6" />
-        </div>
-
-        <div
-          className="absolute"
-          style={{ left: `${(comment.x / 700) * 100}%`, top: `${(comment.y / 500) * 100}%` }}
-        >
-          <div className="relative">
-            <svg width="28" height="36" viewBox="0 0 32 40" fill="none">
-              <path d="M16 38c0 0-14-12.5-14-22a14 14 0 1128 0c0 9.5-14 22-14 22z" fill="#6366F1" stroke="#fff" strokeWidth="2" />
-              <text x="16" y="20" textAnchor="middle" fill="#fff" fontSize="12" fontWeight="700" fontFamily="system-ui">
-                {comment.authorInitial}
-              </text>
-            </svg>
-            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-[#6366F1]/30 animate-pulse-dot" />
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function CommentDetailActions({ comment, selectedIdx, totalFiltered, onReviewStatus, onPrev, onNext }: CommentDetailProps & { comment: Comment }) {
-  return (
-    <div className="shrink-0 border-t border-border bg-card px-6 py-3">
-      <div className="flex items-center gap-2 max-w-2xl mx-auto">
-        <ActionBtn
-          active={comment.reviewStatus === 'accepted'}
-          variant="accept"
-          onClick={() => onReviewStatus(comment.id, 'accepted')}
-          shortcut="A"
-        >
-          <CheckIcon size={14} /> Accept
-        </ActionBtn>
-        <ActionBtn
-          active={comment.reviewStatus === 'rejected'}
-          variant="reject"
-          onClick={() => onReviewStatus(comment.id, 'rejected')}
-          shortcut="R"
-        >
-          <XIcon size={14} /> Reject
-        </ActionBtn>
-        <ActionBtn
-          variant="neutral"
-          onClick={() => onReviewStatus(comment.id, 'open')}
-          shortcut="O"
-        >
-          Re-open
-        </ActionBtn>
-
-        <div className="w-px h-5 bg-border mx-1" />
-
-        <ActionBtn variant="neutral" onClick={() => window.open(comment.pageUrl, '_blank')}>
-          <ExternalLinkIcon size={13} /> Open page
-        </ActionBtn>
-
+      {/* ── Status Bar ── */}
+      <footer className="flex items-center gap-5 px-5 h-[32px] shrink-0 border-t border-border bg-card text-[10px] font-mono text-muted-foreground">
+        <span><Kbd>A</Kbd> accept</span>
+        <span><Kbd>R</Kbd> reject</span>
+        <span><Kbd>O</Kbd> re-open</span>
+        <span><Kbd>Space</Kbd> next</span>
+        <span><Kbd>J</Kbd>/<Kbd>K</Kbd> nav</span>
+        <span><Kbd>S</Kbd> sidebar</span>
         <div className="flex-1" />
-
-        <button
-          onClick={onPrev}
-          disabled={selectedIdx <= 0}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-30 disabled:pointer-events-none transition-colors"
-        >
-          <ChevronLeftIcon size={16} />
-        </button>
-        <span className="text-xs font-mono text-muted-foreground tabular-nums">
-          {selectedIdx + 1}/{totalFiltered}
-        </span>
-        <button
-          onClick={onNext}
-          disabled={selectedIdx >= totalFiltered - 1}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent disabled:opacity-30 disabled:pointer-events-none transition-colors"
-        >
-          <ChevronRightIcon size={16} />
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function CommentDetailEmpty() {
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
-      <div className="w-12 h-12 rounded-2xl bg-muted flex items-center justify-center mb-4">
-        <CursorIcon className="text-muted-foreground" />
-      </div>
-      <p className="text-base font-semibold text-foreground mb-1">Select a comment</p>
-      <p className="text-sm text-muted-foreground max-w-xs">
-        Pick a feedback item from the list to see the full context, screenshot, and actions.
-      </p>
-      <div className="flex gap-3 mt-6 text-xs text-muted-foreground font-mono">
-        <Kbd>J</Kbd><Kbd>K</Kbd> navigate
-        <span className="mx-1">·</span>
-        <Kbd>A</Kbd> accept
-        <span className="mx-1">·</span>
-        <Kbd>R</Kbd> reject
-      </div>
-    </div>
-  )
-}
-
-// ─── AgentSidebar ───────────────────────────────────────────────────
-
-interface AgentSidebarProps {
-  events: AgentEvent[]
-  onClose: () => void
-}
-
-function AgentSidebar({ events, onClose }: AgentSidebarProps) {
-  return (
-    <aside className="w-[300px] shrink-0 flex flex-col border-l border-border bg-sidebar overflow-y-auto animate-slide-in">
-      <div className="px-4 py-4 border-b border-sidebar-border">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-base font-bold text-foreground tracking-tight">Agent handoff</h2>
-          <button onClick={onClose} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
-            <XIcon size={14} />
+        {!sidebarOpen && (
+          <button onClick={() => setSidebarOpen(true)} className="text-[11px] font-semibold text-primary hover:underline">
+            Show agent panel
           </button>
-        </div>
-        <p className="text-xs text-muted-foreground">Proof-style agent bridge</p>
-      </div>
-
-      <AgentStatusCard />
-      <AgentActivityFeed events={events} />
-    </aside>
-  )
-}
-
-function AgentStatusCard() {
-  return (
-    <div className="px-4 py-3 border-b border-sidebar-border animate-fade-in">
-      <div className="flex items-center gap-2 mb-3">
-        <div className="relative">
-          <div className="w-2 h-2 rounded-full bg-agent-active animate-pulse-dot" />
-          <div className="absolute inset-0 w-2 h-2 rounded-full animate-pulse-ring" />
-        </div>
-        <span className="text-[11px] font-bold text-agent-active uppercase tracking-wider">Live</span>
-        <span className="text-[11px] text-muted-foreground">— Claude Code connected</span>
-      </div>
-
-      <div className="rounded-lg border border-border bg-card p-3 mb-3">
-        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Share URL</p>
-        <p className="text-[11px] font-mono text-foreground break-all leading-relaxed mb-2">
-          feedbackwidget.com/shares/<wbr />4f4G-sf7y
-        </p>
-        <div className="flex gap-2">
-          <button className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-background text-[11px] font-semibold text-foreground hover:bg-accent transition-colors">
-            <CopyIcon size={11} /> Copy URL
-          </button>
-          <button className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-background text-[11px] font-semibold text-foreground hover:bg-accent transition-colors">
-            <ExternalLinkIcon size={11} /> Open
-          </button>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2.5 rounded-lg border border-border bg-card p-3 animate-scale-in">
-        <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-          <BotIcon size={14} className="text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-foreground">claude-code</p>
-          <p className="text-[11px] text-muted-foreground truncate">
-            Editing components/Nav.tsx — adjusting breakpoints
-          </p>
-        </div>
-        <div className="w-1.5 h-1.5 rounded-full bg-agent-active animate-pulse-dot shrink-0" />
-      </div>
+        )}
+      </footer>
     </div>
-  )
-}
-
-function AgentActivityFeed({ events }: { events: AgentEvent[] }) {
-  return (
-    <div className="px-4 py-3 flex-1">
-      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-3">Activity</p>
-      <div className="space-y-0 animate-activity">
-        {events.map((ev) => (
-          <div key={ev.id} className="flex gap-3 py-2 border-b border-border/40 last:border-0">
-            <div className="mt-1.5 shrink-0">
-              <div className={cn(
-                'w-1.5 h-1.5 rounded-full',
-                ev.type === 'resolve' ? 'bg-status-accepted' :
-                ev.type === 'claim' ? 'bg-status-claimed' :
-                ev.type === 'file' ? 'bg-status-in-progress' :
-                'bg-muted-foreground/30',
-              )} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-[12px] text-foreground leading-snug">{ev.description}</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">{timeAgo(ev.timestamp)}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ─── StatusBar ──────────────────────────────────────────────────────
-
-function StatusBar({ sidebarOpen, onShowSidebar }: { sidebarOpen: boolean; onShowSidebar: () => void }) {
-  return (
-    <footer className="flex items-center gap-5 px-5 h-[32px] shrink-0 border-t border-border bg-card text-[10px] font-mono text-muted-foreground">
-      <span><Kbd>A</Kbd> accept</span>
-      <span><Kbd>R</Kbd> reject</span>
-      <span><Kbd>O</Kbd> re-open</span>
-      <span><Kbd>Space</Kbd> next</span>
-      <span><Kbd>J</Kbd>/<Kbd>K</Kbd> nav</span>
-      <span><Kbd>S</Kbd> sidebar</span>
-      <div className="flex-1" />
-      {!sidebarOpen && (
-        <button onClick={onShowSidebar} className="text-[11px] font-semibold text-primary hover:underline">
-          Show agent panel
-        </button>
-      )}
-    </footer>
   )
 }
 
