@@ -9,6 +9,7 @@ interface FetchCall {
 
 function mockFetch(
   postResponder?: (init?: RequestInit) => Response | Promise<Response>,
+  getResponder?: () => Response | Promise<Response>,
 ) {
   const calls: FetchCall[] = []
   const impl = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -18,10 +19,13 @@ function mockFetch(
         ? postResponder(init)
         : new Response(JSON.stringify({ success: true }), { status: 200 })
     }
+    if (init?.method === 'PATCH') {
+      return new Response(JSON.stringify({ success: true }), { status: 200 })
+    }
     if (init?.method === 'DELETE') {
       return new Response(JSON.stringify({ success: true }), { status: 200 })
     }
-    return new Response('[]', { status: 200 })
+    return getResponder ? getResponder() : new Response('[]', { status: 200 })
   })
   vi.stubGlobal('fetch', impl)
   return calls
@@ -132,6 +136,42 @@ describe('<FeedbackWidget />', () => {
     await waitFor(() =>
       expect(calls.some((c) => c.url.includes('projectKey=second'))).toBe(true),
     )
+  })
+
+  it('PATCHes review status through the public comments endpoint', async () => {
+    const pageUrl = window.location.href.split('?')[0].split('#')[0]
+    const calls = mockFetch(undefined, () => new Response(JSON.stringify([
+      {
+        id: 'comment-1',
+        projectId: 'proj',
+        pageUrl,
+        x: 20,
+        y: 30,
+        selector: 'body',
+        body: 'resolve me',
+        reviewStatus: 'open',
+        createdAt: '2026-04-22T00:00:00Z',
+      },
+    ]), { status: 200 }))
+
+    render(<FeedbackWidget projectId="proj" apiBase="https://x.example/api" />)
+
+    await waitFor(() => expect(document.body.textContent).toContain('resolve me'))
+    const resolveButton = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('button[title="Mark as resolved"]')
+      if (!button) throw new Error('resolve button not mounted yet')
+      return button
+    })
+    fireEvent.click(resolveButton)
+
+    await waitFor(() => {
+      const patch = calls.find((c) => c.init?.method === 'PATCH')
+      expect(patch?.url).toBe('https://x.example/api/v1/public/comments')
+      expect(JSON.parse(String(patch?.init?.body))).toEqual({
+        id: 'comment-1',
+        reviewStatus: 'accepted',
+      })
+    })
   })
 
   describe('submit flow', () => {

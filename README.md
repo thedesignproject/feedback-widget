@@ -40,19 +40,23 @@ export default function App() {
 | Prop | Type | Required | Description |
 | --- | --- | --- | --- |
 | `projectId` | `string` | yes | Namespace for comments. All comments are scoped by this value. |
-| `apiBase` | `string` | yes | Base URL of the backend that serves `GET /comments` and `POST /comments`. |
+| `apiBase` | `string` | yes | Base URL of the backend that serves the widget API. For this repo's Vercel functions, use `https://<your-deployment>/api`. |
 
 ## Backend setup (reference implementation)
 
-The widget expects these HTTP endpoints at `apiBase`:
+The current widget calls these HTTP endpoints at `apiBase`:
 
-- `GET /comments?projectId=…` → returns `Comment[]` ordered by newest first.
-- `POST /comments` with JSON body `{ projectId, url, x, y, element, comment }` → inserts a row and returns `{ success: true }`.
-- `PATCH /comments` with JSON body `{ id, status?, comment? }` → updates a comment (used by the reviewer sidebar for resolve / edit).
-- `DELETE /comments?id=<uuid>` → deletes a single comment (used by the reviewer sidebar).
-- `DELETE /comments?projectId=smoke-*` → bulk delete, token-gated for the CI smoke workflow only (see `SMOKE_CLEANUP_TOKEN`).
+- `GET /v1/public/comments?projectKey=…` → returns `Comment[]` ordered by newest first.
+- `POST /v1/public/comments` with JSON body `{ projectKey, pageUrl, x, y, selector, body }` → inserts a row and returns the created comment.
+- `PATCH /v1/public/comments` with JSON body `{ id, reviewStatus?, body? }` → updates a comment (used by the reviewer sidebar for resolve / edit).
 
-`api/comments.ts` in this repo implements both on a single Vercel serverless function backed by Supabase Postgres. To stand up a copy:
+The reference backend also keeps a legacy `/comments` proxy for older widget versions:
+
+- `GET /comments?projectId=…`
+- `POST /comments` with JSON body `{ projectId, url, x, y, element, comment }`
+- `PATCH /comments` with JSON body `{ id, status?, comment? }`
+
+`api/v1/public/comments.ts` implements the current endpoint, and `api/comments.ts` proxies the legacy shape into it. Both are backed by Supabase Postgres. To stand up a copy:
 
 1. Create a Supabase project and run `supabase/schema.sql` to create the `comments` table.
 2. Enable Row Level Security on the `comments` table. With no policies defined, anon keys are denied everything by default — the API uses the `service_role` key which bypasses RLS.
@@ -65,14 +69,14 @@ This is one working setup, not the only one. Anything that implements the endpoi
 
 ## Security
 
-In v0, reviewer operations (`PATCH /comments` and `DELETE /comments?id=`) are **unauthenticated**. Anyone who can reach `apiBase` and knows a comment's UUID can edit or delete that row. The bulk `DELETE ?projectId=` path is gated by `SMOKE_CLEANUP_TOKEN` and scoped to `smoke-*` projectIds, so it cannot be used to wipe real projects.
+In v0, reviewer operations (`PATCH /comments`) are **unauthenticated**. Anyone who can reach `apiBase` and knows a comment's UUID can edit that row.
 
 Until proper reviewer auth lands, deploy reviewer UIs (the sidebar) behind your own authentication layer — do not expose them on public pages. Tracked in [issue #28](https://github.com/thedesignproject/feedback-widget/issues/28).
 
 ## Requirements
 
 - React 18 or 19 on the consuming app.
-- A backend implementing the two endpoints above.
+- A backend implementing the endpoints above.
 
 ## Development
 
