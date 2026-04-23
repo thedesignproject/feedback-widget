@@ -259,6 +259,7 @@ export function App() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // ⌘K must run before the input-focus / palette-open guards below — it's the global escape hatch.
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
         setCmdOpen((v) => !v)
@@ -323,7 +324,6 @@ export function App() {
 
       {/* ── Top Header ── */}
       <header className="flex items-center gap-3 px-5 h-[52px] shrink-0 border-b border-border bg-card">
-        {/* Logo */}
         <div className="flex items-center gap-2 mr-2">
           <div className="w-6 h-6 rounded-md bg-primary flex items-center justify-center">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-primary-foreground">
@@ -333,10 +333,8 @@ export function App() {
           <span className="text-sm font-bold tracking-tight text-foreground font-serif italic">feedback</span>
         </div>
 
-        {/* Separator */}
         <div className="w-px h-5 bg-border" />
 
-        {/* Project Tabs */}
         <nav className="flex items-center gap-1 flex-1 overflow-auto">
           {projects.map((p) => (
             <button
@@ -363,7 +361,6 @@ export function App() {
             </button>
           ))}
 
-          {/* Add project */}
           <div className="relative">
             <button
               onClick={() => setAddProjectOpen((v) => !v)}
@@ -386,9 +383,7 @@ export function App() {
           </div>
         </nav>
 
-        {/* Header right */}
         <div className="flex items-center gap-2 ml-auto">
-          {/* Search trigger */}
           <button
             onClick={() => setCmdOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-background text-muted-foreground text-xs w-52 hover:border-muted-foreground/30 hover:bg-accent transition-colors cursor-pointer"
@@ -399,7 +394,6 @@ export function App() {
               <span className="text-[11px]">⌘</span>K
             </kbd>
           </button>
-          {/* Avatar */}
           <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold text-primary">
             TO
           </div>
@@ -412,7 +406,6 @@ export function App() {
         {/* ── Left Panel: Comment List ── */}
         <div className="w-[400px] shrink-0 flex flex-col border-r border-border bg-card">
 
-          {/* List header */}
           <div className="px-4 pt-4 pb-2.5 border-b border-border">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-base font-bold text-foreground tracking-tight">
@@ -422,7 +415,6 @@ export function App() {
                 <CheckboxIcon /> Select
               </button>
             </div>
-            {/* Filter pills */}
             <div className="flex gap-1">
               {(['all', 'open', 'approved', 'dismissed', 'resolved'] as StatusFilter[]).map((f) => {
                 const count = counts[f as keyof typeof counts] ?? 0
@@ -450,7 +442,6 @@ export function App() {
             </div>
           </div>
 
-          {/* Comment list */}
           <div className="flex-1 overflow-y-auto">
             {filteredComments.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center px-8">
@@ -529,7 +520,6 @@ export function App() {
         <div className="flex-1 flex flex-col overflow-hidden bg-background">
           {selectedComment ? (
             <>
-              {/* Detail header */}
               <div className="flex items-center justify-between px-6 h-[44px] shrink-0 border-b border-border bg-card">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="font-mono font-medium">#{selectedComment.id}</span>
@@ -553,11 +543,9 @@ export function App() {
                 </div>
               </div>
 
-              {/* Detail content */}
               <div className="flex-1 overflow-y-auto">
                 <div key={selectedComment.id} className="max-w-2xl mx-auto px-8 py-8 detail-enter">
 
-                  {/* Screenshot or compact selector fallback */}
                   {selectedComment.screenshotUrl ? (
                     <div className="relative rounded-xl border border-border overflow-hidden mb-6 group">
                       <img
@@ -568,15 +556,12 @@ export function App() {
                       />
                       {/* Darkened overlay for pin visibility */}
                       <div className="absolute inset-0 bg-black/10 pointer-events-none" />
-                      {/* Pin marker */}
                       <div
                         className="absolute pointer-events-none"
                         style={{ left: `${(selectedComment.x / 700) * 100}%`, top: `${(selectedComment.y / 500) * 100}%` }}
                       >
                         <div className="relative -translate-x-1/2 -translate-y-1/2 pin-marker pin-float">
-                          {/* Outer glow */}
                           <div className="absolute inset-0 rounded-full animate-pulse-ring" style={{ background: selectedComment.authorColor, opacity: 0.3 }} />
-                          {/* Gradient dot */}
                           <div
                             className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold pin-dot-shadow border-2 border-white/90"
                             style={{ background: `linear-gradient(135deg, ${selectedComment.authorColor}, ${selectedComment.authorColor}99)` }}
@@ -585,7 +570,6 @@ export function App() {
                           </div>
                         </div>
                       </div>
-                      {/* Selector chip overlay */}
                       <div className="absolute bottom-3 left-3 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md bg-black/60 backdrop-blur-sm border border-white/10">
                         <SelectorIcon size={12} />
                         <span className="text-[11px] font-mono text-white/80">{selectedComment.selector}</span>
@@ -609,7 +593,6 @@ export function App() {
                     </div>
                   )}
 
-                  {/* Author + comment */}
                   <div className="flex items-start gap-3 mb-8">
                     <div
                       className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-xs font-bold text-white"
@@ -633,7 +616,6 @@ export function App() {
                 </div>
               </div>
 
-              {/* Action bar */}
               <div className="shrink-0 border-t border-border bg-card px-6 py-3">
                 <div className="flex items-center gap-2 max-w-2xl mx-auto">
                   <ActionBtn
@@ -672,7 +654,6 @@ export function App() {
 
                   <div className="flex-1" />
 
-                  {/* Prev / Next */}
                   <button
                     onClick={goPrev}
                     disabled={selectedIdx <= 0}
@@ -716,7 +697,6 @@ export function App() {
         {/* ── Right Panel: Agent Sidebar ── */}
         {sidebarOpen && (
           <aside className="w-[300px] shrink-0 flex flex-col border-l border-border bg-sidebar overflow-y-auto animate-slide-in">
-            {/* Header */}
             <div className="px-4 py-4 border-b border-sidebar-border">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-base font-bold text-foreground tracking-tight">Agent handoff</h2>
@@ -749,7 +729,6 @@ export function App() {
               </div>
             </div>
 
-            {/* Agent picker */}
             <div className="px-4 py-3 border-b border-sidebar-border">
               <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Your agent</p>
               <div className="relative">
@@ -796,7 +775,6 @@ export function App() {
               </p>
             </div>
 
-            {/* Connected agent */}
             {agentConnected && (
               <div className="px-4 py-3 border-b border-sidebar-border animate-fade-in">
                 <div className="flex items-center gap-2 mb-2.5">
@@ -821,7 +799,6 @@ export function App() {
               </div>
             )}
 
-            {/* Activity feed */}
             <div className="px-4 py-3 flex-1">
               <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-3">Activity</p>
               <div className="space-y-0 animate-activity">
@@ -909,7 +886,8 @@ function CommandPalette({ onClose, comments, onSelect, onAction, selectedComment
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    requestAnimationFrame(() => inputRef.current?.focus())
+    const h = requestAnimationFrame(() => inputRef.current?.focus())
+    return () => cancelAnimationFrame(h)
   }, [])
 
   const results = useMemo<CmdItem[]>(() => {
@@ -940,6 +918,8 @@ function CommandPalette({ onClose, comments, onSelect, onAction, selectedComment
 
     return q ? [...matchedComments, ...matchedActions] : [...matchedActions, ...matchedComments]
   }, [query, comments])
+
+  useEffect(() => { setActiveIdx(0) }, [query])
 
   useEffect(() => {
     const list = listRef.current
@@ -983,7 +963,7 @@ function CommandPalette({ onClose, comments, onSelect, onAction, selectedComment
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => { setQuery(e.target.value); setActiveIdx(0) }}
+            onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search feedback, jump to comment, or run action…"
             className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
