@@ -20,14 +20,14 @@ interface ClickTarget {
 
 interface Comment {
   id: string
-  project_id: string
-  url: string
+  projectId: string
+  pageUrl: string
   x: number
   y: number
-  element: string
-  comment: string
-  status: string
-  created_at: string
+  selector: string
+  body: string
+  reviewStatus: string
+  createdAt: string
 }
 
 const WIDGET_ATTR = 'data-fw'
@@ -74,6 +74,23 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [editText, setEditText] = useState('')
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
 
+  // Track current URL for SPA navigation (pins scoped to page)
+  const [currentUrl, setCurrentUrl] = useState(() => window.location.href.split('?')[0].split('#')[0])
+  useEffect(() => {
+    const update = () => setCurrentUrl(window.location.href.split('?')[0].split('#')[0])
+    window.addEventListener('popstate', update)
+    // Patch pushState/replaceState to detect SPA navigation
+    const origPush = history.pushState.bind(history)
+    const origReplace = history.replaceState.bind(history)
+    history.pushState = (...args) => { origPush(...args); update() }
+    history.replaceState = (...args) => { origReplace(...args); update() }
+    return () => {
+      window.removeEventListener('popstate', update)
+      history.pushState = origPush
+      history.replaceState = origReplace
+    }
+  }, [])
+
   // Sidebar state
   const [comments, setComments] = useState<Comment[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -89,11 +106,11 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   useEffect(() => {
     async function fetchComments() {
       try {
-        const res = await fetch(`${apiBase}/comments?projectId=${encodeURIComponent(projectId)}`)
+        const res = await fetch(`${apiBase}/v1/public/comments?projectKey=${encodeURIComponent(projectId)}`)
         if (!res.ok) return
         const data = await res.json()
         if (Array.isArray(data)) {
-          setComments(data.map((c: any) => ({ ...c, status: c.status || 'pending' })))
+          setComments(data.map((c: any) => ({ ...c, reviewStatus: c.reviewStatus || 'open' })))
         }
       } catch {
         // endpoint not ready yet — use empty array
@@ -189,16 +206,16 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     const targetData = { ...target }
 
     try {
-      const res = await fetch(`${apiBase}/comments`, {
+      const res = await fetch(`${apiBase}/v1/public/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          projectId,
-          url: targetData.url,
+          projectKey: projectId,
+          pageUrl: targetData.url,
           x: targetData.x,
           y: targetData.y,
-          element: targetData.selector,
-          comment: commentText,
+          selector: targetData.selector,
+          body: commentText,
         }),
       })
 
@@ -209,14 +226,14 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
       const newComment: Comment = {
         id: crypto.randomUUID(),
-        project_id: projectId,
-        url: targetData.url,
+        projectId,
+        pageUrl: targetData.url,
         x: targetData.x,
         y: targetData.y,
-        element: targetData.selector,
-        comment: commentText,
-        status: 'pending',
-        created_at: new Date().toISOString(),
+        selector: targetData.selector,
+        body: commentText,
+        reviewStatus: 'open',
+        createdAt: new Date().toISOString(),
       }
 
       setComments((prev) => [newComment, ...prev])
@@ -318,34 +335,32 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     }
   }, [])
 
-  async function patchComment(id: string, updates: Record<string, string>) {
+  async function patchReviewStatus(id: string, reviewStatus: string) {
     try {
-      await fetch(`${apiBase}/comments`, {
+      await fetch(`${apiBase}/v1/comments/${id}/review-status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, ...updates }),
+        body: JSON.stringify({ reviewStatus }),
       })
     } catch (err) {
       console.warn('[FeedbackWidget] PATCH failed:', err)
     }
   }
 
-  function updateStatus(commentId: string, status: 'approved' | 'rejected') {
-    setComments((prev) => prev.map((c) => c.id === commentId ? { ...c, status } : c))
-    patchComment(commentId, { status })
+  function updateStatus(commentId: string, reviewStatus: 'accepted' | 'rejected') {
+    setComments((prev) => prev.map((c) => c.id === commentId ? { ...c, reviewStatus } : c))
+    patchReviewStatus(commentId, reviewStatus)
   }
 
   function deleteComment(commentId: string) {
     setComments((prev) => prev.filter((c) => c.id !== commentId))
-    fetch(`${apiBase}/comments?id=${commentId}`, { method: 'DELETE' }).catch(() => {})
   }
 
   function saveEdit(commentId: string) {
     if (!editText.trim()) return
     const text = editText.trim()
-    setComments((prev) => prev.map((c) => c.id === commentId ? { ...c, comment: text } : c))
+    setComments((prev) => prev.map((c) => c.id === commentId ? { ...c, body: text } : c))
     setEditingId(null)
-    patchComment(commentId, { comment: text })
   }
 
   // --- Highlight element from comment ---
@@ -403,10 +418,14 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   }
 
   const cutoff = new Date('2026-04-19T00:00:00Z')
-  const visibleComments = useMemo(() => comments.filter((c) => new Date(c.created_at) >= cutoff), [comments])
+  const visibleComments = useMemo(() => comments.filter((c) => {
+    if (new Date(c.createdAt) < cutoff) return false
+    const commentUrl = c.pageUrl.split('?')[0].split('#')[0]
+    return commentUrl === currentUrl
+  }), [comments, currentUrl])
   const sortedComments = useMemo(() => [...visibleComments].sort((a, b) => {
-    const aResolved = a.status === 'approved' || a.status === 'rejected'
-    const bResolved = b.status === 'approved' || b.status === 'rejected'
+    const aResolved = a.reviewStatus === 'accepted' || a.reviewStatus === 'rejected'
+    const bResolved = b.reviewStatus === 'accepted' || b.reviewStatus === 'rejected'
     if (aResolved !== bResolved) return aResolved ? 1 : -1
     return 0
   }), [visibleComments])
@@ -672,10 +691,10 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         const pinNumber = visibleComments.length - i
         const isSelected = selectedPin === c.id
         const isHovered = hoveredPin === c.id && !isSelected
-        const statusDotColor = c.status === 'approved' ? '#22c55e' : c.status === 'rejected' ? '#ef4444' : '#111'
-        const truncated = c.comment.length > 60 ? c.comment.slice(0, 60) + '\u2026' : c.comment
+        const statusDotColor = c.reviewStatus === 'accepted' ? '#22c55e' : c.reviewStatus === 'rejected' ? '#ef4444' : '#111'
+        const truncated = c.body.length > 60 ? c.body.slice(0, 60) + '\u2026' : c.body
         const pinColor = isSelected ? '#3b82f6' : '#f5f5f5'
-        const initial = (c.comment[0] || 'U').toUpperCase()
+        const initial = (c.body[0] || 'U').toUpperCase()
         return (
           <div key={c.id} {...{ [WIDGET_ATTR]: '' }}>
             {/* Pin marker */}
@@ -750,13 +769,13 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             {/* Pin detail popover */}
             {isSelected && (() => {
               const avColor = avatarColor(c.id)
-              const initial = (c.comment[0] || 'U').toUpperCase()
-              const stBadge = c.status === 'approved'
+              const initial = (c.body[0] || 'U').toUpperCase()
+              const stBadge = c.reviewStatus === 'accepted'
                 ? { bg: '#ecfdf5', color: '#059669', label: 'Approved' }
-                : c.status === 'rejected'
+                : c.reviewStatus === 'rejected'
                   ? { bg: '#fef2f2', color: '#dc2626', label: 'Rejected' }
                   : { bg: '#fffbeb', color: '#d97706', label: 'Pending' }
-              const selectorShort = c.element.split('>').pop()?.trim() || c.element
+              const selectorShort = c.selector.split('>').pop()?.trim() || c.selector
               return (
                 <>
                   <div
@@ -790,7 +809,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: 600, color: '#111', marginBottom: 2 }}>User</div>
                         <div style={{ fontSize: 11, color: '#aaa' }}>
-                          #{pinNumber} &middot; {timeAgo(c.created_at)}
+                          #{pinNumber} &middot; {timeAgo(c.createdAt)}
                         </div>
                       </div>
                       {/* Status badge */}
@@ -804,7 +823,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
                     {/* Comment text */}
                     <div style={{ fontSize: 14, lineHeight: 1.6, color: '#333', marginBottom: 14 }}>
-                      {c.comment}
+                      {c.body}
                     </div>
 
                     {/* Element chip */}
@@ -894,16 +913,16 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           )}
           {sortedComments.map((c, i) => {
               const pinNum = visibleComments.length - visibleComments.indexOf(c)
-              const isResolved = c.status === 'approved' || c.status === 'rejected'
-              const isPending = !c.status || c.status === 'pending'
+              const isResolved = c.reviewStatus === 'accepted' || c.reviewStatus === 'rejected'
+              const isPending = !c.reviewStatus || c.reviewStatus === 'open'
               const isEditing = editingId === c.id
-              const initial = (c.comment[0] || 'U').toUpperCase()
+              const initial = (c.body[0] || 'U').toUpperCase()
               const isMenuOpen = menuOpenId === c.id
               return (
                 <div
                   key={c.id}
                   className="fw-sidebar-card"
-                  onClick={() => { if (!isEditing && !isMenuOpen) { setSelectedPin(c.id); highlightElement(c.element) } }}
+                  onClick={() => { if (!isEditing && !isMenuOpen) { setSelectedPin(c.id); highlightElement(c.selector) } }}
                   style={{
                     padding: '12px 16px',
                     cursor: isEditing ? 'default' : 'pointer',
@@ -936,14 +955,14 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                       <span style={{ fontSize: 11, color: '#888' }}>#{pinNum}</span>
                       <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M2 4h4M4.5 2L6.5 4L4.5 6" stroke="#555" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" /></svg>
                       <span style={{ fontSize: 11, color: '#666', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {c.url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '') || '/'}
+                        {c.pageUrl.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '') || '/'}
                       </span>
                     </div>
 
                     {/* Author + time */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                       <span style={{ fontSize: 12, fontWeight: 600, color: '#ddd' }}>User</span>
-                      <span style={{ fontSize: 11, color: '#555' }}>{timeAgo(c.created_at)}</span>
+                      <span style={{ fontSize: 11, color: '#555' }}>{timeAgo(c.createdAt)}</span>
                     </div>
 
                     {/* Comment text */}
@@ -975,10 +994,10 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                       </div>
                     ) : (
                       <div
-                        onClick={(e) => { e.stopPropagation(); setEditingId(c.id); setEditText(c.comment) }}
+                        onClick={(e) => { e.stopPropagation(); setEditingId(c.id); setEditText(c.body) }}
                         style={{ fontSize: 13, lineHeight: 1.4, color: '#ccc', cursor: 'text' }}
                       >
-                        {c.comment}
+                        {c.body}
                       </div>
                     )}
                   </div>
@@ -993,7 +1012,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                     }}>
                       {isPending && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); updateStatus(c.id, 'approved') }}
+                          onClick={(e) => { e.stopPropagation(); updateStatus(c.id, 'accepted') }}
                           title="Mark as resolved"
                           style={{
                             width: 22, height: 22, borderRadius: '50%', border: '1.5px solid #555',
@@ -1045,16 +1064,16 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                       }}
                     >
                       <button
-                        onClick={() => { updateStatus(c.id, c.status === 'approved' ? 'pending' as any : 'approved'); setMenuOpenId(null) }}
+                        onClick={() => { updateStatus(c.id, c.reviewStatus === 'accepted' ? 'open' as any : 'accepted'); setMenuOpenId(null) }}
                         style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#ccc', fontSize: 12, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = '#333')}
                         onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
-                        {c.status === 'approved' ? 'Unresolve' : 'Mark as resolved'}
+                        {c.reviewStatus === 'accepted' ? 'Unresolve' : 'Mark as resolved'}
                       </button>
                       <button
-                        onClick={() => { setEditingId(c.id); setEditText(c.comment); setMenuOpenId(null) }}
+                        onClick={() => { setEditingId(c.id); setEditText(c.body); setMenuOpenId(null) }}
                         style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#ccc', fontSize: 12, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = '#333')}
                         onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}

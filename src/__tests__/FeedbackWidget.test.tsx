@@ -88,7 +88,7 @@ describe('<FeedbackWidget />', () => {
 
     await waitFor(() => {
       const getCall = calls.find((c) => !c.init || c.init.method === undefined)
-      expect(getCall?.url).toBe('https://x.example/api/comments?projectId=my-site')
+      expect(getCall?.url).toBe('https://x.example/api/v1/public/comments?projectKey=my-site')
     })
   })
 
@@ -97,7 +97,7 @@ describe('<FeedbackWidget />', () => {
     render(<FeedbackWidget projectId="acme/internal" apiBase="https://x.example/api" />)
 
     await waitFor(() => {
-      expect(calls[0]?.url).toBe('https://x.example/api/comments?projectId=acme%2Finternal')
+      expect(calls[0]?.url).toBe('https://x.example/api/v1/public/comments?projectKey=acme%2Finternal')
     })
   })
 
@@ -126,11 +126,11 @@ describe('<FeedbackWidget />', () => {
     const { rerender } = render(
       <FeedbackWidget projectId="first" apiBase="https://x.example/api" />,
     )
-    await waitFor(() => expect(calls.some((c) => c.url.includes('projectId=first'))).toBe(true))
+    await waitFor(() => expect(calls.some((c) => c.url.includes('projectKey=first'))).toBe(true))
 
     rerender(<FeedbackWidget projectId="second" apiBase="https://x.example/api" />)
     await waitFor(() =>
-      expect(calls.some((c) => c.url.includes('projectId=second'))).toBe(true),
+      expect(calls.some((c) => c.url.includes('projectKey=second'))).toBe(true),
     )
   })
 
@@ -146,12 +146,12 @@ describe('<FeedbackWidget />', () => {
       await waitFor(() => {
         const post = calls.find((c) => c.init?.method === 'POST')
         expect(post).toBeDefined()
-        expect(post?.url).toBe('https://x.example/api/comments')
+        expect(post?.url).toBe('https://x.example/api/v1/public/comments')
         const body = JSON.parse(String(post?.init?.body))
-        expect(body.projectId).toBe('proj')
-        expect(body.comment).toBe('bug here')
-        expect(typeof body.element).toBe('string')
-        expect(body.element.length).toBeGreaterThan(0)
+        expect(body.projectKey).toBe('proj')
+        expect(body.body).toBe('bug here')
+        expect(typeof body.selector).toBe('string')
+        expect(body.selector.length).toBeGreaterThan(0)
       })
 
       await waitFor(() => {

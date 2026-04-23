@@ -1,11 +1,32 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { createPublicComment, getProject } from '../../_lib/store.js'
-import { handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
+import { createPublicComment, getProject, listComments } from '../../_lib/store.js'
+import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
+
+const METHODS = ['GET', 'POST', 'OPTIONS']
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (handleOptions(req, res, ['POST', 'OPTIONS'])) return
-  if (req.method !== 'POST') return methodNotAllowed(req, res, ['POST', 'OPTIONS'])
+  if (handleOptions(req, res, METHODS)) return
+  if (req.method === 'GET') return handleGet(req, res)
+  if (req.method === 'POST') return handlePost(req, res)
+  return methodNotAllowed(req, res, METHODS)
+}
 
+async function handleGet(req: VercelRequest, res: VercelResponse) {
+  try {
+    const projectKey = getStringQuery(req.query.projectKey)
+    if (!projectKey) return jsonError(req, res, 400, 'Missing projectKey')
+
+    const pageUrl = getStringQuery(req.query.pageUrl)
+    const comments = await listComments(projectKey, pageUrl ? { pageUrl } : {})
+
+    setCors(req, res, METHODS)
+    return res.status(200).json(comments)
+  } catch (error) {
+    return jsonError(req, res, 500, error instanceof Error ? error.message : 'Unexpected error')
+  }
+}
+
+async function handlePost(req: VercelRequest, res: VercelResponse) {
   try {
     const { projectKey, projectId, pageUrl, selector, x, y, body } = req.body ?? {}
     const resolvedProjectKey = typeof projectKey === 'string' ? projectKey : projectId
@@ -38,10 +59,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body,
     })
 
-    setCors(req, res, ['POST', 'OPTIONS'])
+    setCors(req, res, METHODS)
     return res.status(201).json(comment)
   } catch (error) {
     return jsonError(req, res, 500, error instanceof Error ? error.message : 'Unexpected error')
   }
 }
-
