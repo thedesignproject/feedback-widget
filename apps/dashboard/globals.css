@@ -211,6 +211,49 @@
   animation: fade-in-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* Command palette */
+@keyframes cmd-backdrop {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes cmd-modal {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.cmd-backdrop-enter {
+  animation: cmd-backdrop 0.15s ease both;
+}
+
+.cmd-modal-enter {
+  animation: cmd-modal 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Pin marker */
+.pin-dot-shadow {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 3px rgba(0, 0, 0, 0.15);
+}
+
+.pin-marker {
+  animation: pin-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes pin-pop {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes pin-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.pin-float {
+  animation: pin-float 2.5s ease-in-out infinite;
+  animation-delay: 0.3s;
+}
+
 /* Button press */
 .btn-press:active:not(:disabled) {
   transform: scale(0.96);
