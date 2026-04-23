@@ -73,6 +73,23 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [editText, setEditText] = useState('')
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
 
+  // Track current URL for SPA navigation (pins scoped to page)
+  const [currentUrl, setCurrentUrl] = useState(() => window.location.href.split('?')[0].split('#')[0])
+  useEffect(() => {
+    const update = () => setCurrentUrl(window.location.href.split('?')[0].split('#')[0])
+    window.addEventListener('popstate', update)
+    // Patch pushState/replaceState to detect SPA navigation
+    const origPush = history.pushState.bind(history)
+    const origReplace = history.replaceState.bind(history)
+    history.pushState = (...args) => { origPush(...args); update() }
+    history.replaceState = (...args) => { origReplace(...args); update() }
+    return () => {
+      window.removeEventListener('popstate', update)
+      history.pushState = origPush
+      history.replaceState = origReplace
+    }
+  }, [])
+
   // Sidebar state
   const [comments, setComments] = useState<Comment[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -399,7 +416,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   }
 
   const cutoff = new Date('2026-04-19T00:00:00Z')
-  const currentUrl = window.location.href.split('?')[0].split('#')[0]
   const visibleComments = useMemo(() => comments.filter((c) => {
     if (new Date(c.createdAt) < cutoff) return false
     const commentUrl = c.pageUrl.split('?')[0].split('#')[0]
