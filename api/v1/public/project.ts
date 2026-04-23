@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createShare, getProject, getProjectShare } from '../../_lib/store.js'
 import { encryptToken, generateAccessToken, generateSlug, hashToken } from '../../_lib/tokens.js'
 import { decryptToken } from '../../_lib/tokens.js'
-import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
+import { getStringQuery, handleOptions, isOriginAllowed, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
 
 function appUrl() {
   return process.env.APP_URL || 'http://localhost:3000'
@@ -19,9 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const project = await getProject(projectKey)
     if (!project) return jsonError(req, res, 404, 'Project not found')
 
-    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null
-    const allowedOrigins = project.allowedOrigins || []
-    if (origin && allowedOrigins.length > 0 && !allowedOrigins.includes('*') && !allowedOrigins.includes(origin)) {
+    if (!isOriginAllowed(req, project)) {
       return jsonError(req, res, 403, 'Origin not allowed for this project')
     }
 

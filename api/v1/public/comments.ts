@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createPublicComment, getProject, listComments } from '../../_lib/store.js'
-import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
+import { getStringQuery, handleOptions, isOriginAllowed, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
 
 const METHODS = ['GET', 'POST', 'OPTIONS']
 
@@ -44,9 +44,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
       return jsonError(req, res, 404, 'Project not found')
     }
 
-    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null
-    const allowedOrigins = project.allowedOrigins || []
-    if (origin && allowedOrigins.length > 0 && !allowedOrigins.includes('*') && !allowedOrigins.includes(origin)) {
+    if (!isOriginAllowed(req, project)) {
       return jsonError(req, res, 403, 'Origin not allowed for this project')
     }
 
