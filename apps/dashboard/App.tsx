@@ -156,6 +156,32 @@ function truncateUrl(url: string) {
   return url.startsWith('/') ? url : url.replace(/^https?:\/\/[^/]+/, '')
 }
 
+function isInactive(c: Comment) {
+  return c.reviewStatus === 'dismissed' || c.implementationStatus === 'resolved'
+}
+
+const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
+  open: 'Open',
+  approved: 'Approved',
+  dismissed: 'Dismissed',
+}
+
+const IMPL_STATUS_LABELS: Record<ImplStatus, string> = {
+  unassigned: 'To do',
+  claimed: 'Claimed',
+  in_progress: 'In progress',
+  blocked: 'Blocked',
+  resolved: 'Resolved',
+}
+
+const IMPL_STATUS_COLORS: Record<ImplStatus, string> = {
+  unassigned: 'bg-status-open-bg text-status-open',
+  claimed: 'bg-status-claimed-bg text-status-claimed',
+  in_progress: 'bg-status-in-progress-bg text-status-in-progress',
+  blocked: 'bg-status-blocked-bg text-status-blocked',
+  resolved: 'bg-status-done-bg text-status-done',
+}
+
 // ─── App ────────────────────────────────────────────────────────────
 
 export function App() {
@@ -172,13 +198,11 @@ export function App() {
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false)
   const [, setTick] = useState(0)
 
-  // Refresh time-ago labels
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 15000)
     return () => clearInterval(t)
   }, [])
 
-  // Filtered comments
   const projectComments = useMemo(() =>
     comments.filter((c) => c.projectId === selectedProject),
   [comments, selectedProject])
@@ -188,24 +212,23 @@ export function App() {
       : statusFilter === 'resolved' ? projectComments.filter((c) => c.implementationStatus === 'resolved')
       : projectComments.filter((c) => c.reviewStatus === statusFilter)
 
-    return [...filtered].sort((a, b) => {
-      const aInactive = a.reviewStatus === 'dismissed' || a.implementationStatus === 'resolved' ? 1 : 0
-      const bInactive = b.reviewStatus === 'dismissed' || b.implementationStatus === 'resolved' ? 1 : 0
-      return aInactive - bInactive
-    })
+    return [...filtered].sort((a, b) => Number(isInactive(a)) - Number(isInactive(b)))
   }, [projectComments, statusFilter])
 
   const selectedComment = comments.find((c) => c.id === selectedCommentId) ?? null
 
-  const counts = useMemo(() => ({
-    all: projectComments.length,
-    open: projectComments.filter((c) => c.reviewStatus === 'open').length,
-    approved: projectComments.filter((c) => c.reviewStatus === 'approved').length,
-    dismissed: projectComments.filter((c) => c.reviewStatus === 'dismissed').length,
-    resolved: projectComments.filter((c) => c.implementationStatus === 'resolved').length,
-  }), [projectComments])
+  const counts = useMemo(() => projectComments.reduce(
+    (acc, c) => {
+      acc.all++
+      if (c.reviewStatus === 'open') acc.open++
+      else if (c.reviewStatus === 'approved') acc.approved++
+      else if (c.reviewStatus === 'dismissed') acc.dismissed++
+      if (c.implementationStatus === 'resolved') acc.resolved++
+      return acc
+    },
+    { all: 0, open: 0, approved: 0, dismissed: 0, resolved: 0 },
+  ), [projectComments])
 
-  // Handlers
   const handleReviewStatus = useCallback((id: string, status: ReviewStatus) => {
     setComments((prev) => prev.map((c) => c.id === id ? { ...c, reviewStatus: status, updatedAt: new Date().toISOString() } : c))
   }, [])
@@ -217,6 +240,10 @@ export function App() {
       updatedAt: new Date().toISOString(),
     } : c))
   }, [])
+
+  const toggleReview = useCallback((c: Comment, target: 'approved' | 'dismissed') => {
+    handleReviewStatus(c.id, c.reviewStatus === target ? 'open' : target)
+  }, [handleReviewStatus])
 
   const selectedIdx = filteredComments.findIndex((c) => c.id === selectedCommentId)
 
@@ -230,23 +257,19 @@ export function App() {
     if (prev) setSelectedCommentId(prev.id)
   }, [filteredComments, selectedIdx])
 
-  // Keyboard shortcuts
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      // Cmd+K / Ctrl+K — always works
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
         setCmdOpen((v) => !v)
         return
       }
 
-      // Escape closes the palette
       if (e.key === 'Escape' && cmdOpen) {
         setCmdOpen(false)
         return
       }
 
-      // Skip other shortcuts when an input is focused or palette is open
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (cmdOpen) return
@@ -256,8 +279,8 @@ export function App() {
       if (e.key === ' ') { e.preventDefault(); goNext() }
 
       if (selectedComment) {
-        if (e.key === 'a') handleReviewStatus(selectedComment.id, selectedComment.reviewStatus === 'approved' ? 'open' : 'approved')
-        if (e.key === 'd') handleReviewStatus(selectedComment.id, selectedComment.reviewStatus === 'dismissed' ? 'open' : 'dismissed')
+        if (e.key === 'a') toggleReview(selectedComment, 'approved')
+        if (e.key === 'd') toggleReview(selectedComment, 'dismissed')
         if (e.key === 'm') handleToggleResolved(selectedComment.id)
       }
 
@@ -266,9 +289,8 @@ export function App() {
 
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [goNext, goPrev, selectedComment, handleReviewStatus, handleToggleResolved, cmdOpen])
+  }, [goNext, goPrev, selectedComment, toggleReview, handleToggleResolved, cmdOpen])
 
-  // Command palette actions
   const handleCmdSelect = useCallback((commentId: string) => {
     setSelectedCommentId(commentId)
     setCmdOpen(false)
@@ -280,11 +302,11 @@ export function App() {
     if (action === 'filter-open') setStatusFilter('open')
     if (action === 'filter-approved') setStatusFilter('approved')
     if (action === 'filter-dismissed') setStatusFilter('dismissed')
-    if (selectedComment && action === 'approve') handleReviewStatus(selectedComment.id, selectedComment.reviewStatus === 'approved' ? 'open' : 'approved')
-    if (selectedComment && action === 'dismiss') handleReviewStatus(selectedComment.id, selectedComment.reviewStatus === 'dismissed' ? 'open' : 'dismissed')
+    if (selectedComment && action === 'approve') toggleReview(selectedComment, 'approved')
+    if (selectedComment && action === 'dismiss') toggleReview(selectedComment, 'dismissed')
     if (selectedComment && action === 'resolve') handleToggleResolved(selectedComment.id)
     setCmdOpen(false)
-  }, [selectedComment, handleReviewStatus])
+  }, [selectedComment, toggleReview, handleToggleResolved])
 
   const handleAddProject = useCallback((name: string) => {
     const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
@@ -442,7 +464,7 @@ export function App() {
               <div className="animate-stagger">
               {filteredComments.map((comment) => {
                 const isActive = comment.id === selectedCommentId
-                const isInactive = comment.reviewStatus === 'dismissed' || comment.implementationStatus === 'resolved'
+                const inactive = isInactive(comment)
                 const borderColor =
                   comment.implementationStatus === 'resolved' ? 'border-l-status-done' :
                   comment.reviewStatus === 'approved' ? 'border-l-status-accepted' :
@@ -457,10 +479,9 @@ export function App() {
                       'w-full text-left px-4 py-3 border-b border-border/50 border-l-[3px] card-hover',
                       borderColor,
                       isActive ? 'bg-accent' : 'hover:bg-accent/40',
-                      isInactive && 'opacity-50'
+                      inactive && 'opacity-50'
                     )}
                   >
-                    {/* Row 1: Author + timestamp */}
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
                         <div
@@ -474,17 +495,13 @@ export function App() {
                       <span className="text-[10px] text-muted-foreground/60">{timeAgo(comment.createdAt)}</span>
                     </div>
 
-                    {/* Row 2: Comment body */}
                     <p className={cn(
                       'text-[12px] leading-relaxed mb-2 line-clamp-2 pl-[26px]',
-                      (comment.reviewStatus === 'dismissed' || comment.implementationStatus === 'resolved')
-                        ? 'text-muted-foreground/50 line-through'
-                        : 'text-muted-foreground'
+                      inactive ? 'text-muted-foreground/50 line-through' : 'text-muted-foreground'
                     )}>
                       {comment.body}
                     </p>
 
-                    {/* Row 3: Metadata + badges */}
                     <div className="flex items-center gap-1.5 pl-[26px] flex-wrap">
                       <StatusBadge status={comment.reviewStatus} />
                       {comment.implementationStatus !== 'unassigned' && (
@@ -525,7 +542,7 @@ export function App() {
                     selectedComment.reviewStatus === 'dismissed' ? 'text-status-rejected' :
                     'text-muted-foreground'
                   )}>
-                    {selectedComment.reviewStatus.charAt(0).toUpperCase() + selectedComment.reviewStatus.slice(1)}
+                    {REVIEW_STATUS_LABELS[selectedComment.reviewStatus]}
                   </span>
                   {selectedComment.implementationStatus !== 'unassigned' && (
                     <>
@@ -622,7 +639,7 @@ export function App() {
                   <ActionBtn
                     active={selectedComment.reviewStatus === 'approved'}
                     variant="accept"
-                    onClick={() => handleReviewStatus(selectedComment.id, selectedComment.reviewStatus === 'approved' ? 'open' : 'approved')}
+                    onClick={() => toggleReview(selectedComment, 'approved')}
                     shortcut="A"
                   >
                     <CheckIcon size={14} /> Approve
@@ -630,7 +647,7 @@ export function App() {
                   <ActionBtn
                     active={selectedComment.reviewStatus === 'dismissed'}
                     variant="reject"
-                    onClick={() => handleReviewStatus(selectedComment.id, selectedComment.reviewStatus === 'dismissed' ? 'open' : 'dismissed')}
+                    onClick={() => toggleReview(selectedComment, 'dismissed')}
                     shortcut="D"
                   >
                     <XIcon size={14} /> Dismiss
@@ -848,23 +865,36 @@ export function App() {
         )}
       </footer>
 
-      {/* ── Command Palette ── */}
-      <CommandPalette
-        open={cmdOpen}
-        onClose={() => setCmdOpen(false)}
-        comments={projectComments}
-        onSelect={handleCmdSelect}
-        onAction={handleCmdAction}
-        selectedCommentId={selectedCommentId}
-      />
+      {cmdOpen && (
+        <CommandPalette
+          onClose={() => setCmdOpen(false)}
+          comments={projectComments}
+          onSelect={handleCmdSelect}
+          onAction={handleCmdAction}
+          selectedCommentId={selectedCommentId}
+        />
+      )}
     </div>
   )
 }
 
 // ─── Command Palette ────────────────────────────────────────────────
 
+type CmdIconType = 'comment' | 'check' | 'x' | 'filter' | 'sidebar'
+type CmdItem = { id: string; type: 'comment' | 'action'; label: string; detail: string; icon: CmdIconType }
+
+const CMD_ACTIONS: CmdItem[] = [
+  { id: 'approve', type: 'action', label: 'Toggle approve', detail: 'A', icon: 'check' },
+  { id: 'dismiss', type: 'action', label: 'Toggle dismiss', detail: 'D', icon: 'x' },
+  { id: 'resolve', type: 'action', label: 'Toggle resolved', detail: 'M', icon: 'check' },
+  { id: 'toggle-sidebar', type: 'action', label: 'Toggle agent panel', detail: 'S', icon: 'sidebar' },
+  { id: 'filter-all', type: 'action', label: 'Filter: Show all', detail: '', icon: 'filter' },
+  { id: 'filter-open', type: 'action', label: 'Filter: Open only', detail: '', icon: 'filter' },
+  { id: 'filter-approved', type: 'action', label: 'Filter: Approved only', detail: '', icon: 'filter' },
+  { id: 'filter-dismissed', type: 'action', label: 'Filter: Dismissed only', detail: '', icon: 'filter' },
+]
+
 interface CommandPaletteProps {
-  open: boolean
   onClose: () => void
   comments: Comment[]
   onSelect: (commentId: string) => void
@@ -872,41 +902,20 @@ interface CommandPaletteProps {
   selectedCommentId: string
 }
 
-function CommandPalette({ open, onClose, comments, onSelect, onAction, selectedCommentId }: CommandPaletteProps) {
+function CommandPalette({ onClose, comments, onSelect, onAction, selectedCommentId }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const [activeIdx, setActiveIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  // Reset state when opened
   useEffect(() => {
-    if (open) {
-      setQuery('')
-      setActiveIdx(0)
-      // Small delay to ensure the modal is rendered before focusing
-      requestAnimationFrame(() => inputRef.current?.focus())
-    }
-  }, [open])
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
 
-  // Build results list
-  const results = useMemo(() => {
+  const results = useMemo<CmdItem[]>(() => {
     const q = query.toLowerCase().trim()
-    const items: { id: string; type: 'comment' | 'action'; label: string; detail: string; icon: 'comment' | 'check' | 'x' | 'reopen' | 'filter' | 'sidebar' }[] = []
 
-    // Actions always appear if they match query (or query is empty)
-    const actions: typeof items = [
-      { id: 'approve', type: 'action', label: 'Toggle approve', detail: 'A', icon: 'check' },
-      { id: 'dismiss', type: 'action', label: 'Toggle dismiss', detail: 'D', icon: 'x' },
-      { id: 'resolve', type: 'action', label: 'Toggle resolved', detail: 'M', icon: 'check' },
-      { id: 'toggle-sidebar', type: 'action', label: 'Toggle agent panel', detail: 'S', icon: 'sidebar' },
-      { id: 'filter-all', type: 'action', label: 'Filter: Show all', detail: '', icon: 'filter' },
-      { id: 'filter-open', type: 'action', label: 'Filter: Open only', detail: '', icon: 'filter' },
-      { id: 'filter-approved', type: 'action', label: 'Filter: Approved only', detail: '', icon: 'filter' },
-      { id: 'filter-dismissed', type: 'action', label: 'Filter: Dismissed only', detail: '', icon: 'filter' },
-    ]
-
-    // Filter comments by query
-    const matchedComments = comments
+    const matchedComments: CmdItem[] = comments
       .filter((c) => {
         if (!q) return true
         return (
@@ -917,7 +926,7 @@ function CommandPalette({ open, onClose, comments, onSelect, onAction, selectedC
         )
       })
       .slice(0, 8)
-      .map((c): typeof items[number] => ({
+      .map((c) => ({
         id: c.id,
         type: 'comment',
         label: c.body.length > 80 ? c.body.slice(0, 80) + '…' : c.body,
@@ -925,27 +934,13 @@ function CommandPalette({ open, onClose, comments, onSelect, onAction, selectedC
         icon: 'comment',
       }))
 
-    // Filter actions by query
     const matchedActions = q
-      ? actions.filter((a) => a.label.toLowerCase().includes(q))
-      : actions
+      ? CMD_ACTIONS.filter((a) => a.label.toLowerCase().includes(q))
+      : CMD_ACTIONS
 
-    // Comments first when searching, actions first when empty
-    if (q) {
-      items.push(...matchedComments, ...matchedActions)
-    } else {
-      items.push(...matchedActions, ...matchedComments)
-    }
-
-    return items
+    return q ? [...matchedComments, ...matchedActions] : [...matchedActions, ...matchedComments]
   }, [query, comments])
 
-  // Clamp active index when results change
-  useEffect(() => {
-    setActiveIdx(0)
-  }, [query])
-
-  // Scroll active item into view
   useEffect(() => {
     const list = listRef.current
     if (!list) return
@@ -975,129 +970,110 @@ function CommandPalette({ open, onClose, comments, onSelect, onAction, selectedC
     }
   }, [results.length, handleSelect, onClose])
 
-  if (!open) return null
-
   return (
-    <>
-      {/* Backdrop + centering container */}
+    <div className="fixed inset-0 z-50 flex justify-center pt-[20vh]">
       <div
-        className="fixed inset-0 z-50 bg-background/60 backdrop-blur-sm cmd-backdrop-enter flex justify-center pt-[20vh]"
+        className="absolute inset-0 bg-background/60 backdrop-blur-sm cmd-backdrop-enter"
         onClick={onClose}
       />
+      <div className="relative w-full max-w-[540px] h-fit rounded-xl border border-border bg-card shadow-2xl shadow-black/40 overflow-hidden cmd-modal-enter">
+        <div className="flex items-center gap-3 px-4 h-[52px] border-b border-border">
+          <SearchIcon />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => { setQuery(e.target.value); setActiveIdx(0) }}
+            onKeyDown={handleKeyDown}
+            placeholder="Search feedback, jump to comment, or run action…"
+            className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <kbd className="px-1.5 py-0.5 rounded border border-border bg-muted text-[10px] font-mono text-muted-foreground">
+            ESC
+          </kbd>
+        </div>
 
-      {/* Modal */}
-      <div className="fixed z-50 inset-0 flex justify-center pt-[20vh] pointer-events-none">
-        <div className="w-full max-w-[540px] h-fit pointer-events-auto cmd-modal-enter">
-        <div className="rounded-xl border border-border bg-card shadow-2xl shadow-black/40 overflow-hidden">
-              {/* Input area */}
-              <div className="flex items-center gap-3 px-4 h-[52px] border-b border-border">
-                <SearchIcon />
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Search feedback, jump to comment, or run action…"
-                  className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-                <kbd className="px-1.5 py-0.5 rounded border border-border bg-muted text-[10px] font-mono text-muted-foreground">
-                  ESC
-                </kbd>
-              </div>
+        <div ref={listRef} className="max-h-[360px] overflow-y-auto py-2">
+          {results.length === 0 ? (
+            <div className="px-4 py-8 text-center">
+              <p className="text-sm text-muted-foreground">No results for "{query}"</p>
+            </div>
+          ) : (
+            results.map((item, i) => {
+              const prevType = results[i - 1]?.type
+              const showHeader = i === 0 || item.type !== prevType
 
-              {/* Results list */}
-              <div ref={listRef} className="max-h-[360px] overflow-y-auto py-2">
-                {results.length === 0 ? (
-                  <div className="px-4 py-8 text-center">
-                    <p className="text-sm text-muted-foreground">No results for "{query}"</p>
-                  </div>
-                ) : (
-                  <>
-                    {/* Section labels */}
-                    {results.map((item, i) => {
-                      // Insert section headers
-                      const prevType = results[i - 1]?.type
-                      const showHeader = i === 0 || item.type !== prevType
+              return (
+                <div key={`${item.type}-${item.id}`}>
+                  {showHeader && (
+                    <div className="px-4 pt-2 pb-1">
+                      <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                        {item.type === 'action' ? 'Actions' : 'Comments'}
+                      </span>
+                    </div>
+                  )}
+                  <button
+                    className={cn(
+                      'w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors',
+                      i === activeIdx
+                        ? 'bg-accent text-foreground'
+                        : 'text-foreground/80 hover:bg-accent/50'
+                    )}
+                    onMouseEnter={() => setActiveIdx(i)}
+                    onClick={() => {
+                      if (item.type === 'comment') onSelect(item.id)
+                      else onAction(item.id)
+                    }}
+                  >
+                    <div className={cn(
+                      'w-7 h-7 rounded-lg shrink-0 flex items-center justify-center',
+                      i === activeIdx ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'
+                    )}>
+                      <CmdIcon type={item.icon} />
+                    </div>
 
-                      return (
-                        <div key={`${item.type}-${item.id}`}>
-                          {showHeader && (
-                            <div className="px-4 pt-2 pb-1">
-                              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                                {item.type === 'action' ? 'Actions' : 'Comments'}
-                              </span>
-                            </div>
-                          )}
-                          <button
-                            className={cn(
-                              'w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors',
-                              i === activeIdx
-                                ? 'bg-accent text-foreground'
-                                : 'text-foreground/80 hover:bg-accent/50'
-                            )}
-                            onMouseEnter={() => setActiveIdx(i)}
-                            onClick={() => {
-                              if (item.type === 'comment') onSelect(item.id)
-                              else onAction(item.id)
-                            }}
-                          >
-                            {/* Icon */}
-                            <div className={cn(
-                              'w-7 h-7 rounded-lg shrink-0 flex items-center justify-center',
-                              i === activeIdx ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'
-                            )}>
-                              <CmdIcon type={item.icon} />
-                            </div>
+                    <div className="flex-1 min-w-0">
+                      <p className={cn(
+                        'text-[13px] leading-snug truncate',
+                        i === activeIdx ? 'text-foreground' : 'text-foreground/80',
+                        item.type === 'comment' && item.id === selectedCommentId && 'font-semibold'
+                      )}>
+                        {item.label}
+                      </p>
+                      {item.detail && (
+                        <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+                          {item.detail}
+                        </p>
+                      )}
+                    </div>
 
-                            {/* Label + detail */}
-                            <div className="flex-1 min-w-0">
-                              <p className={cn(
-                                'text-[13px] leading-snug truncate',
-                                i === activeIdx ? 'text-foreground' : 'text-foreground/80',
-                                item.type === 'comment' && item.id === selectedCommentId && 'font-semibold'
-                              )}>
-                                {item.label}
-                              </p>
-                              {item.detail && (
-                                <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                                  {item.detail}
-                                </p>
-                              )}
-                            </div>
-
-                            {/* Shortcut hint or arrow */}
-                            {item.type === 'action' && item.detail ? (
-                              <kbd className="px-1.5 py-0.5 rounded border border-border bg-muted text-[10px] font-mono text-muted-foreground shrink-0">
-                                {item.detail}
-                              </kbd>
-                            ) : (
-                              i === activeIdx && (
-                                <span className="text-muted-foreground shrink-0">
-                                  <ReturnIcon />
-                                </span>
-                              )
-                            )}
-                          </button>
-                        </div>
+                    {item.type === 'action' && item.detail ? (
+                      <kbd className="px-1.5 py-0.5 rounded border border-border bg-muted text-[10px] font-mono text-muted-foreground shrink-0">
+                        {item.detail}
+                      </kbd>
+                    ) : (
+                      i === activeIdx && (
+                        <span className="text-muted-foreground shrink-0">
+                          <ReturnIcon />
+                        </span>
                       )
-                    })}
-                  </>
-                )}
-              </div>
+                    )}
+                  </button>
+                </div>
+              )
+            })
+          )}
+        </div>
 
-              {/* Footer hints */}
-              <div className="flex items-center gap-4 px-4 h-[36px] border-t border-border text-[10px] font-mono text-muted-foreground">
-                <span className="flex items-center gap-1"><Kbd>↑</Kbd><Kbd>↓</Kbd> navigate</span>
-                <span className="flex items-center gap-1"><Kbd>↵</Kbd> select</span>
-                <span className="flex items-center gap-1"><Kbd>esc</Kbd> close</span>
-              </div>
-          </div>
+        <div className="flex items-center gap-4 px-4 h-[36px] border-t border-border text-[10px] font-mono text-muted-foreground">
+          <span className="flex items-center gap-1"><Kbd>↑</Kbd><Kbd>↓</Kbd> navigate</span>
+          <span className="flex items-center gap-1"><Kbd>↵</Kbd> select</span>
+          <span className="flex items-center gap-1"><Kbd>esc</Kbd> close</span>
         </div>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -1169,7 +1145,7 @@ function AddProjectPopover({ onAdd, onClose }: { onAdd: (name: string) => void; 
   )
 }
 
-function CmdIcon({ type }: { type: 'comment' | 'check' | 'x' | 'filter' | 'sidebar' }) {
+function CmdIcon({ type }: { type: CmdIconType }) {
   switch (type) {
     case 'comment': return <ChatIcon />
     case 'check': return <CheckIcon size={14} />
@@ -1190,7 +1166,6 @@ function ReturnIcon() {
 // ─── Small Components ───────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: ReviewStatus }) {
-  const labels: Record<ReviewStatus, string> = { open: 'Open', approved: 'Approved', dismissed: 'Dismissed' }
   return (
     <span className={cn(
       'inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold',
@@ -1198,26 +1173,15 @@ function StatusBadge({ status }: { status: ReviewStatus }) {
       status === 'dismissed' && 'bg-status-rejected-bg text-status-rejected',
       status === 'open' && 'bg-status-open-bg text-status-open',
     )}>
-      {labels[status]}
+      {REVIEW_STATUS_LABELS[status]}
     </span>
   )
 }
 
 function ImplBadge({ status }: { status: ImplStatus }) {
-  const labels: Record<ImplStatus, string> = {
-    unassigned: 'To do', claimed: 'Claimed', in_progress: 'In progress',
-    blocked: 'Blocked', resolved: 'Resolved',
-  }
-  const colorClass: Record<ImplStatus, string> = {
-    unassigned: 'bg-status-open-bg text-status-open',
-    claimed: 'bg-status-claimed-bg text-status-claimed',
-    in_progress: 'bg-status-in-progress-bg text-status-in-progress',
-    blocked: 'bg-status-blocked-bg text-status-blocked',
-    resolved: 'bg-status-done-bg text-status-done',
-  }
   return (
-    <span className={cn('inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold', colorClass[status])}>
-      {labels[status]}
+    <span className={cn('inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold', IMPL_STATUS_COLORS[status])}>
+      {IMPL_STATUS_LABELS[status]}
     </span>
   )
 }
