@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// Env vars must be set before handler import so getSupabase() doesn't throw
+process.env.SUPABASE_URL = 'https://test.supabase.co'
+process.env.SUPABASE_KEY = 'test-key'
+
 const mockSelect = vi.fn()
 const mockInsert = vi.fn()
 const mockEq = vi.fn()
@@ -60,6 +64,11 @@ beforeEach(() => {
   mockInsert.mockReset()
   mockEq.mockReset()
   mockOrder.mockReset()
+
+  // Default chain for GET: from().select().eq().order()
+  mockOrder.mockResolvedValue({ data: [], error: null })
+  mockEq.mockReturnValue({ order: mockOrder })
+  mockSelect.mockReturnValue({ eq: mockEq })
 })
 
 describe('api/v1/public/comments', () => {
