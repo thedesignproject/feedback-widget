@@ -9,10 +9,14 @@ function safeSetHeader(res: VercelResponse, key: string, value: string) {
 }
 
 export function setCors(req: VercelRequest, res: VercelResponse, methods: string[]) {
-  const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '*'
-  safeSetHeader(res, 'Access-Control-Allow-Origin', origin)
+  const requestedHeaders = Array.isArray(req.headers['access-control-request-headers'])
+    ? req.headers['access-control-request-headers'].join(', ')
+    : req.headers['access-control-request-headers']
+
+  safeSetHeader(res, 'Access-Control-Allow-Origin', '*')
   safeSetHeader(res, 'Access-Control-Allow-Methods', methods.join(', '))
-  safeSetHeader(res, 'Access-Control-Allow-Headers', DEFAULT_HEADERS)
+  safeSetHeader(res, 'Access-Control-Allow-Headers', requestedHeaders || DEFAULT_HEADERS)
+  safeSetHeader(res, 'Access-Control-Max-Age', '86400')
 }
 
 export function handleOptions(req: VercelRequest, res: VercelResponse, methods: string[]) {
@@ -80,4 +84,3 @@ export function getAgentId(req: VercelRequest): string | undefined {
   const bodyAgentId = (req.body as { agentId?: unknown } | undefined)?.agentId
   return typeof bodyAgentId === 'string' && bodyAgentId.length > 0 ? bodyAgentId : undefined
 }
-

@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../_lib/store.js', () => ({
   getProject: vi.fn(),
   createPublicComment: vi.fn(),
+  listComments: vi.fn(),
+  updateReviewStatus: vi.fn(),
 }))
 
-import { createPublicComment, getProject } from '../../_lib/store.js'
+import { createPublicComment, getProject, listComments, updateReviewStatus } from '../../_lib/store.js'
 import handler from './comments.js'
 
 interface MockRes {
@@ -50,9 +52,35 @@ const call = (req: unknown, res: unknown) =>
 beforeEach(() => {
   vi.mocked(getProject).mockReset()
   vi.mocked(createPublicComment).mockReset()
+  vi.mocked(listComments).mockReset()
+  vi.mocked(updateReviewStatus).mockReset()
 })
 
 describe('api/v1/public/comments', () => {
+  it('answers CORS preflight for cross-origin PATCH requests', async () => {
+    const res = mockRes()
+    await call(mockReq({
+      method: 'OPTIONS',
+      headers: {
+        origin: 'https://client.example',
+        'access-control-request-headers': 'content-type, x-client-version',
+      },
+    }), res)
+
+    expect(res.statusCode).toBe(204)
+    expect(res.headers['Access-Control-Allow-Origin']).toBe('*')
+    expect(res.headers['Access-Control-Allow-Methods']).toContain('PATCH')
+    expect(res.headers['Access-Control-Allow-Headers']).toBe('content-type, x-client-version')
+    expect(res.headers['Access-Control-Max-Age']).toBe('86400')
+  })
+
+  it('returns 400 when projectKey is missing on GET', async () => {
+    const res = mockRes()
+    await call(mockReq({ method: 'GET', query: {} }), res)
+    expect(res.statusCode).toBe(400)
+    expect(res.headers['Access-Control-Allow-Origin']).toBe('*')
+  })
+
   it('returns 404 when the project key is unknown', async () => {
     vi.mocked(getProject).mockResolvedValue(null)
     const res = mockRes()
@@ -118,5 +146,33 @@ describe('api/v1/public/comments', () => {
       body: 'Hello',
     })
   })
-})
 
+  it('updates a comment review status for widget compatibility', async () => {
+    vi.mocked(updateReviewStatus).mockResolvedValue({
+      id: 'comment-1',
+      projectId: 'demo-project',
+      pageUrl: 'https://example.com',
+      selector: 'body',
+      x: 10,
+      y: 20,
+      body: 'Hello',
+      reviewStatus: 'accepted',
+      implementationStatus: 'unassigned',
+      claimedByAgentId: null,
+      createdAt: '',
+      updatedAt: '',
+    })
+
+    const res = mockRes()
+    await call(mockReq({
+      method: 'PATCH',
+      headers: { origin: 'https://example.com' },
+      body: { id: 'comment-1', reviewStatus: 'accepted' },
+    }), res)
+
+    expect(updateReviewStatus).toHaveBeenCalledWith('comment-1', 'accepted')
+    expect(res.statusCode).toBe(200)
+    expect((res.body as Record<string, unknown>).reviewStatus).toBe('accepted')
+    expect(res.headers['Access-Control-Allow-Origin']).toBe('*')
+  })
+})

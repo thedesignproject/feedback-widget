@@ -10,6 +10,7 @@ interface FeedbackWidgetProps {
 }
 
 type Mode = 'idle' | 'selecting' | 'commenting'
+type ReviewStatus = 'open' | 'accepted' | 'rejected'
 
 interface ClickTarget {
   selector: string
@@ -26,7 +27,7 @@ interface Comment {
   y: number
   selector: string
   body: string
-  reviewStatus: string
+  reviewStatus: ReviewStatus
   createdAt: string
 }
 
@@ -49,6 +50,29 @@ function timeAgo(date: string): string {
   if (hours < 24) return `${hours}h ago`
   const days = Math.floor(hours / 24)
   return `${days}d ago`
+}
+
+function normalizeReviewStatus(value: unknown): ReviewStatus {
+  if (value === 'accepted' || value === 'rejected') return value
+  return 'open'
+}
+
+async function fetchProjectComments(apiBase: string, projectId: string): Promise<Comment[]> {
+  try {
+    const res = await fetch(`${apiBase}/v1/public/comments?projectKey=${encodeURIComponent(projectId)}`)
+    if (!res.ok) return []
+
+    const data: unknown = await res.json()
+    if (!Array.isArray(data)) return []
+
+    return data.map((comment) => ({
+      ...(comment as Comment),
+      reviewStatus: normalizeReviewStatus((comment as { reviewStatus?: unknown }).reviewStatus),
+    }))
+  } catch {
+    // Endpoint not ready yet; keep the widget usable with an empty sidebar.
+    return []
+  }
 }
 
 export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
@@ -104,19 +128,13 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
   // --- Fetch comments on mount ---
   useEffect(() => {
-    async function fetchComments() {
-      try {
-        const res = await fetch(`${apiBase}/v1/public/comments?projectKey=${encodeURIComponent(projectId)}`)
-        if (!res.ok) return
-        const data = await res.json()
-        if (Array.isArray(data)) {
-          setComments(data.map((c: any) => ({ ...c, reviewStatus: c.reviewStatus || 'open' })))
-        }
-      } catch {
-        // endpoint not ready yet — use empty array
-      }
+    let cancelled = false
+    fetchProjectComments(apiBase, projectId).then((nextComments) => {
+      if (!cancelled) setComments(nextComments)
+    })
+    return () => {
+      cancelled = true
     }
-    fetchComments()
   }, [projectId, apiBase])
 
   // --- Set crosshair cursor when selecting ---
@@ -337,17 +355,17 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
   async function patchReviewStatus(id: string, reviewStatus: string) {
     try {
-      await fetch(`${apiBase}/v1/comments/${id}/review-status`, {
+      await fetch(`${apiBase}/v1/public/comments`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reviewStatus }),
+        body: JSON.stringify({ id, reviewStatus }),
       })
     } catch (err) {
       console.warn('[FeedbackWidget] PATCH failed:', err)
     }
   }
 
-  function updateStatus(commentId: string, reviewStatus: 'accepted' | 'rejected') {
+  function updateStatus(commentId: string, reviewStatus: ReviewStatus) {
     setComments((prev) => prev.map((c) => c.id === commentId ? { ...c, reviewStatus } : c))
     patchReviewStatus(commentId, reviewStatus)
   }
@@ -1064,7 +1082,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                       }}
                     >
                       <button
-                        onClick={() => { updateStatus(c.id, c.reviewStatus === 'accepted' ? 'open' as any : 'accepted'); setMenuOpenId(null) }}
+                        onClick={() => { updateStatus(c.id, c.reviewStatus === 'accepted' ? 'open' : 'accepted'); setMenuOpenId(null) }}
                         style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#ccc', fontSize: 12, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = '#333')}
                         onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}

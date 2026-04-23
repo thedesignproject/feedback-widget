@@ -62,21 +62,20 @@ Props:
 
 | Prop | Type | Required | Description |
 | --- | --- | --- | --- |
-| `apiBase` | `string` | yes | Base URL for the API deployment |
-| `projectId` | `string` | yes | Project public key used for comment capture |
-| `projectKey` | `string` | no | Explicit alias for `projectId` when you want to distinguish public key naming |
-
-The widget is capture-only in production. It does not fetch the full project comment feed and it does not expose reviewer actions.
+| `apiBase` | `string` | yes | Base URL of the backend that serves the widget API. For this repo's Vercel functions, use `https://<your-deployment>/api`. |
+| `projectId` | `string` | yes | Project public key used for comment capture. |
 
 ## API surfaces
 
-### Public ingestion
+### Public comments
 
-```text
-POST /api/v1/public/comments
-```
+The current widget calls these HTTP endpoints at `apiBase`:
 
-Request:
+- `GET /v1/public/comments?projectKey=...` returns page comments for compatibility with the in-page sidebar.
+- `POST /v1/public/comments` creates a public comment.
+- `PATCH /v1/public/comments` updates review status for current widget compatibility.
+
+Create comment request:
 
 ```json
 {
@@ -86,6 +85,15 @@ Request:
   "x": 540,
   "y": 220,
   "body": "This CTA feels too weak"
+}
+```
+
+Patch status request:
+
+```json
+{
+  "id": "comment-id",
+  "reviewStatus": "accepted"
 }
 ```
 
@@ -145,6 +153,11 @@ Useful client variables:
 - `VITE_PROJECT_ID`
 - `VITE_REVIEWER_TOKEN`
 
+## Requirements
+
+- React 18 or 19 on the consuming app.
+- A backend implementing the endpoints above.
+
 ## Development
 
 Install:
@@ -201,4 +214,3 @@ DELETE /api/comments
 ```
 
 That path is kept for backward compatibility and smoke validation. New product work should target `/api/v1/...`.
-
