@@ -18,7 +18,14 @@ function setCors(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 }
 
+const STATUS_MAP: Record<string, string> = {
+  pending: 'open',
+  approved: 'accepted',
+  rejected: 'rejected',
+}
+
 function mapRow(row: Record<string, unknown>) {
+  const dbStatus = typeof row.status === 'string' ? row.status : 'pending'
   return {
     id: row.id,
     projectId: row.project_id,
@@ -27,7 +34,7 @@ function mapRow(row: Record<string, unknown>) {
     x: row.x,
     y: row.y,
     body: row.comment,
-    reviewStatus: row.status ?? 'open',
+    reviewStatus: STATUS_MAP[dbStatus] ?? 'open',
     createdAt: row.created_at,
   }
 }
