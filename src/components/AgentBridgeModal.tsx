@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import type { CSSProperties } from 'react'
 
 type Target = 'claude-code' | 'codex' | 'generic'
 
@@ -36,6 +37,11 @@ interface ProjectResponse {
   doc: { slug: string; token: string; docUrl: string; promptUrl: string }
 }
 
+interface Session {
+  slug: string
+  token: string
+}
+
 const TARGETS: Array<{ id: Target; label: string; hint: string }> = [
   { id: 'claude-code', label: 'Claude Code', hint: 'Anthropic Claude Code CLI' },
   { id: 'codex', label: 'Codex', hint: 'OpenAI Codex CLI' },
@@ -43,8 +49,47 @@ const TARGETS: Array<{ id: Target; label: string; hint: string }> = [
 ]
 
 const WIDGET_ATTR = 'data-fw'
-const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif'
-const mono = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif'
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+
+// Embedded widgets render above customer-page chrome, so we use the
+// max-int z-index pattern shared with FeedbackWidget.tsx.
+const Z_OVERLAY = 2147483646
+const Z_MODAL = 2147483647
+const EASE_OUT_EXPO = 'cubic-bezier(0.16, 1, 0.3, 1)'
+
+// ─── Fetch helpers (module scope so useEffect bodies stay free of `fetch`) ──
+
+async function fetchProjectSession(apiBase: string, projectId: string): Promise<Session> {
+  const res = await fetch(`${apiBase}/v1/public/project?projectKey=${encodeURIComponent(projectId)}`)
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Could not start a session (${res.status}) ${detail}`.trim())
+  }
+  const body = (await res.json()) as ProjectResponse
+  return { slug: body.doc.slug, token: body.doc.token }
+}
+
+async function fetchPrompt(apiBase: string, session: Session, target: Target): Promise<readonly [Target, string]> {
+  const url = `${apiBase}/v1/shares/${session.slug}/prompt?token=${encodeURIComponent(session.token)}&target=${target}`
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Prompt fetch failed (${res.status})`)
+  const body = (await res.json()) as PromptResponse
+  return [target, body.prompt] as const
+}
+
+async function fetchAllPrompts(apiBase: string, session: Session): Promise<Record<Target, string>> {
+  const entries = await Promise.all(TARGETS.map(({ id }) => fetchPrompt(apiBase, session, id)))
+  return Object.fromEntries(entries) as Record<Target, string>
+}
+
+async function fetchShareState(apiBase: string, session: Session): Promise<StateResponse | null> {
+  const res = await fetch(`${apiBase}/v1/agent/shares/${session.slug}/state?token=${encodeURIComponent(session.token)}`)
+  if (!res.ok) return null
+  return (await res.json()) as StateResponse
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function timeAgo(iso: string) {
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000))
@@ -57,13 +102,121 @@ function timeAgo(iso: string) {
   return `${Math.floor(hours / 24)}d ago`
 }
 
-function readShareFromUrl() {
+function readShareFromUrl(): Session | null {
   const search = new URLSearchParams(window.location.search)
-  return {
-    slug: search.get('fw_share') ?? '',
-    token: search.get('token') ?? '',
+  const slug = search.get('fw_share') ?? ''
+  const token = search.get('token') ?? ''
+  return slug && token ? { slug, token } : null
+}
+
+// ─── State ──────────────────────────────────────────────────────────────────
+
+interface State {
+  session: Session | null
+  prompts: Record<Target, string>
+  shareState: StateResponse | null
+  copied: Target | null
+  error: string | null
+  tick: number
+}
+
+type Action =
+  | { type: 'session-resolved'; session: Session }
+  | { type: 'prompts-loaded'; prompts: Record<Target, string> }
+  | { type: 'state-loaded'; shareState: StateResponse }
+  | { type: 'copied'; target: Target | null }
+  | { type: 'error'; message: string }
+  | { type: 'tick' }
+
+const EMPTY_PROMPTS: Record<Target, string> = { 'claude-code': '', 'codex': '', 'generic': '' }
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case 'session-resolved':
+      return { ...state, session: action.session }
+    case 'prompts-loaded':
+      return { ...state, prompts: action.prompts }
+    case 'state-loaded':
+      return { ...state, shareState: action.shareState }
+    case 'copied':
+      return { ...state, copied: action.target }
+    case 'error':
+      return { ...state, error: action.message }
+    case 'tick':
+      return { ...state, tick: state.tick + 1 }
   }
 }
+
+function initState(initialSession: Session | null): State {
+  return {
+    session: initialSession,
+    prompts: EMPTY_PROMPTS,
+    shareState: null,
+    copied: null,
+    error: null,
+    tick: 0,
+  }
+}
+
+// ─── Styles (module-scope so JSX stays readable + references are stable) ────
+
+const containerStyle: CSSProperties = { fontFamily: FONT, color: '#111' }
+
+const overlayStyle: CSSProperties = {
+  position: 'fixed', inset: 0, zIndex: Z_OVERLAY,
+  background: 'rgba(15, 23, 42, 0.5)',
+  backdropFilter: 'blur(4px)',
+  pointerEvents: 'none',
+  animation: 'fw-agent-fade 0.15s ease both',
+}
+
+const modalStyle: CSSProperties = {
+  position: 'fixed',
+  top: '50%', left: '50%',
+  transform: 'translate(-50%, -50%)',
+  zIndex: Z_MODAL,
+  width: 'min(560px, calc(100vw - 32px))',
+  maxHeight: 'calc(100vh - 48px)',
+  display: 'flex', flexDirection: 'column',
+  background: '#fff',
+  borderRadius: 16,
+  boxShadow: '0 24px 60px rgba(15, 23, 42, 0.25), 0 2px 8px rgba(15, 23, 42, 0.08)',
+  animation: `fw-agent-pop 0.18s ${EASE_OUT_EXPO} both`,
+}
+
+const closeButtonStyle: CSSProperties = {
+  marginLeft: 'auto', width: 32, height: 32, borderRadius: 8,
+  border: 'none', background: 'transparent', cursor: 'pointer',
+  color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center',
+  flexShrink: 0,
+}
+
+const targetButtonBase: CSSProperties = {
+  textAlign: 'left',
+  padding: '12px 14px',
+  borderRadius: 10,
+  transition: 'background 0.15s, border-color 0.15s, color 0.15s',
+  fontFamily: FONT,
+}
+
+const presenceCardStyle: CSSProperties = {
+  padding: '6px 10px',
+  background: '#f8fafc',
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  fontSize: 12,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+const statusPillBaseStyle: CSSProperties = {
+  display: 'inline-block', padding: '2px 8px', borderRadius: 9999,
+  fontSize: 12, fontWeight: 600,
+  whiteSpace: 'nowrap', flexShrink: 0, marginTop: 1,
+}
+
+// ─── Component ──────────────────────────────────────────────────────────────
 
 interface AgentBridgeModalProps {
   apiBase: string
@@ -72,50 +225,47 @@ interface AgentBridgeModalProps {
 }
 
 export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeModalProps) {
-  const urlShare = useMemo(readShareFromUrl, [])
-
-  const [session, setSession] = useState<{ slug: string; token: string } | null>(
-    urlShare.slug && urlShare.token ? urlShare : null,
-  )
-  const [prompts, setPrompts] = useState<Record<Target, string>>({ 'claude-code': '', 'codex': '', 'generic': '' })
-  const [state, setState] = useState<StateResponse | null>(null)
-  const [copied, setCopied] = useState<Target | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [, setNow] = useState(0)
+  const initialSession = useMemo(readShareFromUrl, [])
+  const [state, dispatch] = useReducer(reducer, initialSession, initState)
+  const modalRef = useRef<HTMLDivElement | null>(null)
+  const { session, prompts, shareState, copied, error } = state
 
   // Tick every 10s to keep "N seconds ago" labels fresh.
   useEffect(() => {
-    const interval = window.setInterval(() => setNow((n) => n + 1), 10000)
+    const interval = window.setInterval(() => dispatch({ type: 'tick' }), 10000)
     return () => window.clearInterval(interval)
   }, [])
 
+  // Escape to close, plus pointerdown outside the modal to dismiss.
+  // (Pointerdown outside avoids putting a click handler on the visual backdrop,
+  // which would otherwise need to be a button and would steal Tab focus.)
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') onClose()
     }
+    function onPointerDown(event: PointerEvent) {
+      const node = modalRef.current
+      if (node && !node.contains(event.target as Node)) onClose()
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onPointerDown)
+    }
   }, [onClose])
 
-  // Resolve a session: use URL params if present, otherwise auto-provision one for this project.
+  // Resolve a session: use URL params if present, otherwise auto-provision one.
   useEffect(() => {
     if (session) return
-
     let cancelled = false
-    async function resolve() {
-      try {
-        const res = await fetch(`${apiBase}/v1/public/project?projectKey=${encodeURIComponent(projectId)}`)
-        if (!res.ok) {
-          const detail = await res.text().catch(() => '')
-          throw new Error(`Could not start a session (${res.status}) ${detail}`.trim())
-        }
-        const body = (await res.json()) as ProjectResponse
-        if (!cancelled) setSession({ slug: body.doc.slug, token: body.doc.token })
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not start a session.')
-      }
-    }
-    resolve()
+    fetchProjectSession(apiBase, projectId)
+      .then((next) => {
+        if (!cancelled) dispatch({ type: 'session-resolved', session: next })
+      })
+      .catch((err) => {
+        if (!cancelled) dispatch({ type: 'error', message: err instanceof Error ? err.message : 'Could not start a session.' })
+      })
     return () => {
       cancelled = true
     }
@@ -124,25 +274,14 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
   // Once we have a session, load prompts once.
   useEffect(() => {
     if (!session) return
-
     let cancelled = false
-    async function load() {
-      try {
-        const promptEntries = await Promise.all(
-          TARGETS.map(async ({ id }) => {
-            const res = await fetch(`${apiBase}/v1/shares/${session!.slug}/prompt?token=${encodeURIComponent(session!.token)}&target=${id}`)
-            if (!res.ok) throw new Error(`Prompt fetch failed (${res.status})`)
-            const body = (await res.json()) as PromptResponse
-            return [id, body.prompt] as const
-          }),
-        )
-        if (cancelled) return
-        setPrompts(Object.fromEntries(promptEntries) as Record<Target, string>)
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load session.')
-      }
-    }
-    load()
+    fetchAllPrompts(apiBase, session)
+      .then((next) => {
+        if (!cancelled) dispatch({ type: 'prompts-loaded', prompts: next })
+      })
+      .catch((err) => {
+        if (!cancelled) dispatch({ type: 'error', message: err instanceof Error ? err.message : 'Could not load session.' })
+      })
     return () => {
       cancelled = true
     }
@@ -151,19 +290,18 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
   // Poll /state while the modal is open so presence + accepted comments stay live.
   useEffect(() => {
     if (!session) return
-
     let cancelled = false
-    async function fetchState() {
-      try {
-        const res = await fetch(`${apiBase}/v1/agent/shares/${session!.slug}/state?token=${encodeURIComponent(session!.token)}`)
-        if (!res.ok || cancelled) return
-        setState((await res.json()) as StateResponse)
-      } catch {
-        // swallow transient network blips — next tick will retry
-      }
+    const refresh = () => {
+      fetchShareState(apiBase, session)
+        .then((next) => {
+          if (next && !cancelled) dispatch({ type: 'state-loaded', shareState: next })
+        })
+        .catch(() => {
+          // swallow transient network blips — next tick will retry
+        })
     }
-    fetchState()
-    const interval = window.setInterval(fetchState, 4000)
+    refresh()
+    const interval = window.setInterval(refresh, 4000)
     return () => {
       cancelled = true
       window.clearInterval(interval)
@@ -175,49 +313,31 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
     if (!text) return
     try {
       await navigator.clipboard.writeText(text)
-      setCopied(target)
-      window.setTimeout(() => setCopied((current) => (current === target ? null : current)), 1600)
+      dispatch({ type: 'copied', target })
+      window.setTimeout(() => dispatch({ type: 'copied', target: null }), 1600)
     } catch {
-      setError('Copy failed — select the prompt manually and copy.')
+      dispatch({ type: 'error', message: 'Copy failed — select the prompt manually and copy.' })
     }
   }, [prompts])
 
-  const acceptedComments = state?.comments.filter((c) => c.reviewStatus === 'accepted') ?? []
-  const openCount = state?.comments.filter((c) => c.reviewStatus === 'open').length ?? 0
+  const acceptedComments = shareState?.comments.filter((c) => c.reviewStatus === 'accepted') ?? []
+  const openCount = shareState?.comments.filter((c) => c.reviewStatus === 'open').length ?? 0
   const promptsReady = TARGETS.every(({ id }) => Boolean(prompts[id]))
 
   return (
-    <div {...{ [WIDGET_ATTR]: '' }} style={{ fontFamily: font, color: '#111' }}>
+    <div {...{ [WIDGET_ATTR]: '' }} style={containerStyle}>
+      <div aria-hidden="true" style={overlayStyle} />
       <div
-        onClick={onClose}
-        style={{
-          position: 'fixed', inset: 0, zIndex: 2147483646,
-          background: 'rgba(15, 23, 42, 0.5)',
-          backdropFilter: 'blur(4px)',
-          animation: 'fw-agent-fade 0.15s ease both',
-        }}
-      />
-      <div
+        ref={modalRef}
         role="dialog"
+        aria-modal="true"
         aria-label="Connect agent"
-        style={{
-          position: 'fixed',
-          top: '50%', left: '50%',
-          transform: 'translate(-50%, -50%)',
-          zIndex: 2147483647,
-          width: 'min(560px, calc(100vw - 32px))',
-          maxHeight: 'calc(100vh - 48px)',
-          display: 'flex', flexDirection: 'column',
-          background: '#fff',
-          borderRadius: 16,
-          boxShadow: '0 24px 60px rgba(15, 23, 42, 0.25), 0 2px 8px rgba(15, 23, 42, 0.08)',
-          animation: 'fw-agent-pop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.2) both',
-        }}
+        style={modalStyle}
       >
         <div style={{ display: 'flex', alignItems: 'center', padding: '18px 20px', borderBottom: '1px solid #eee' }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>
-              {state?.project.name ?? 'Connect an agent'}
+              {shareState?.project.name ?? 'Connect an agent'}
             </div>
             <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
               Paste one of these prompts into your agent — it joins this session and starts on accepted feedback.
@@ -227,12 +347,7 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
             type="button"
             onClick={onClose}
             aria-label="Close"
-            style={{
-              marginLeft: 'auto', width: 32, height: 32, borderRadius: 8,
-              border: 'none', background: 'transparent', cursor: 'pointer',
-              color: '#888', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0,
-            }}
+            style={closeButtonStyle}
             onMouseEnter={(e) => { e.currentTarget.style.background = '#f5f5f5'; e.currentTarget.style.color = '#111' }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#888' }}
           >
@@ -245,37 +360,17 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
 
         <div style={{ padding: 20, overflowY: 'auto' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 20 }}>
-            {TARGETS.map(({ id, label, hint }) => {
-              const ready = Boolean(prompts[id])
-              const justCopied = copied === id
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => handleCopy(id)}
-                  disabled={!ready}
-                  style={{
-                    textAlign: 'left',
-                    padding: '12px 14px',
-                    background: justCopied ? '#0f172a' : '#fff',
-                    color: justCopied ? '#f8fafc' : '#111',
-                    border: `1px solid ${justCopied ? '#0f172a' : '#e5e5e5'}`,
-                    borderRadius: 10,
-                    cursor: ready ? 'pointer' : 'default',
-                    opacity: ready ? 1 : 0.55,
-                    transition: 'background 0.15s, border-color 0.15s, color 0.15s',
-                    fontFamily: font,
-                  }}
-                >
-                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
-                    {justCopied ? 'Copied ✓' : ready ? `Copy ${label}` : label}
-                  </div>
-                  <div style={{ fontSize: 11, color: justCopied ? '#94a3b8' : '#888' }}>
-                    {ready ? hint : 'Loading…'}
-                  </div>
-                </button>
-              )
-            })}
+            {TARGETS.map(({ id, label, hint }) => (
+              <TargetButton
+                key={id}
+                target={id}
+                label={label}
+                hint={hint}
+                ready={Boolean(prompts[id])}
+                copied={copied === id}
+                onCopy={handleCopy}
+              />
+            ))}
           </div>
 
           {error && (
@@ -290,22 +385,22 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
             </div>
           )}
 
-          {state && state.presence.length > 0 && (
+          {shareState && shareState.presence.length > 0 && (
             <Section label="Live agents">
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {state.presence.map((p) => (
-                  <div key={p.agentId} style={{ padding: '6px 10px', background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8, fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                {shareState.presence.map((p) => (
+                  <div key={p.agentId} style={presenceCardStyle}>
                     <span style={{ fontWeight: 700 }}>{p.agentId}</span>
                     <span style={{ color: '#888' }}>{p.status}</span>
                     {p.summary && <span style={{ color: '#555' }}>· {p.summary}</span>}
-                    <span style={{ color: '#aaa', marginLeft: 'auto', fontSize: 11 }}>{timeAgo(p.lastSeenAt)}</span>
+                    <span style={{ color: '#aaa', marginLeft: 'auto', fontSize: 12 }}>{timeAgo(p.lastSeenAt)}</span>
                   </div>
                 ))}
               </div>
             </Section>
           )}
 
-          {state && (
+          {shareState && (
             <Section label={`Accepted feedback (${acceptedComments.length})`}>
               {acceptedComments.length === 0 ? (
                 <div style={{ background: '#fafafa', border: '1px dashed #ddd', borderRadius: 10, padding: 16, textAlign: 'center', color: '#888', fontSize: 13 }}>
@@ -318,7 +413,7 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
                       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, color: '#111', lineHeight: 1.5, marginBottom: 4 }}>{comment.body}</div>
-                          <div style={{ fontSize: 11, color: '#aaa', fontFamily: mono, wordBreak: 'break-all' }}>
+                          <div style={{ fontSize: 12, color: '#aaa', fontFamily: MONO, wordBreak: 'break-all' }}>
                             {comment.pageUrl} · {comment.selector}
                           </div>
                         </div>
@@ -333,7 +428,7 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
             </Section>
           )}
 
-          {state && openCount > 0 && (
+          {shareState && openCount > 0 && (
             <div style={{ marginTop: 12, fontSize: 12, color: '#aaa' }}>
               {openCount} more comment{openCount === 1 ? '' : 's'} waiting on review.
             </div>
@@ -352,10 +447,45 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
   )
 }
 
+interface TargetButtonProps {
+  target: Target
+  label: string
+  hint: string
+  ready: boolean
+  copied: boolean
+  onCopy: (target: Target) => void
+}
+
+function TargetButton({ target, label, hint, ready, copied, onCopy }: TargetButtonProps) {
+  const style: CSSProperties = {
+    ...targetButtonBase,
+    background: copied ? '#0f172a' : '#fff',
+    color: copied ? '#f8fafc' : '#111',
+    border: `1px solid ${copied ? '#0f172a' : '#e5e5e5'}`,
+    cursor: ready ? 'pointer' : 'default',
+    opacity: ready ? 1 : 0.55,
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => onCopy(target)}
+      disabled={!ready}
+      style={style}
+    >
+      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
+        {copied ? 'Copied ✓' : ready ? `Copy ${label}` : label}
+      </div>
+      <div style={{ fontSize: 12, color: copied ? '#94a3b8' : '#888' }}>
+        {ready ? hint : 'Loading…'}
+      </div>
+    </button>
+  )
+}
+
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 20 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
         {label}
       </div>
       {children}
@@ -372,14 +502,10 @@ const STATUS_COLORS: Record<string, { bg: string; fg: string; label: string }> =
 }
 
 function StatusPill({ status }: { status: string }) {
-  const style = STATUS_COLORS[status] ?? STATUS_COLORS.unassigned
+  const palette = STATUS_COLORS[status] ?? STATUS_COLORS.unassigned
   return (
-    <span style={{
-      display: 'inline-block', padding: '2px 8px', borderRadius: 9999,
-      background: style.bg, color: style.fg, fontSize: 10, fontWeight: 600,
-      whiteSpace: 'nowrap', flexShrink: 0, marginTop: 1,
-    }}>
-      {style.label}
+    <span style={{ ...statusPillBaseStyle, background: palette.bg, color: palette.fg }}>
+      {palette.label}
     </span>
   )
 }
