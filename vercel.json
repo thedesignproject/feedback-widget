@@ -1,5 +1,6 @@
 {
   "buildCommand": "npm run typecheck && vite build --config demo/vite.config.ts",
+  "devCommand": "vite --config demo/vite.config.ts --port $PORT",
   "outputDirectory": "demo/dist",
   "functions": {
     "api/**/*.ts": {

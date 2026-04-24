@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createPublicComment, getProject, listComments, updateReviewStatus } from '../../_lib/store.js'
 import { getStringQuery, handleOptions, isOriginAllowed, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
 import type { ReviewStatus } from '../../_lib/status.js'
+import { getSupabase } from '../../_lib/supabase.js'
 
 const METHODS = ['GET', 'POST', 'PATCH', 'OPTIONS']
 const VALID_STATUSES = new Set(['open', 'accepted', 'approved', 'rejected', 'pending'])
@@ -54,9 +55,30 @@ async function handlePatch(req: VercelRequest, res: VercelResponse) {
   }
 }
 
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
+
+async function uploadImage(projectKey: string, mimeType: string, base64Data: string): Promise<string> {
+  const buffer = Buffer.from(base64Data, 'base64')
+  if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error('Image exceeds 5 MB limit')
+
+  const ext = mimeType.split('/')[1] ?? 'png'
+  const path = `${projectKey}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+
+  const supabase = getSupabase()
+  const { error } = await supabase.storage
+    .from('feedback-images')
+    .upload(path, buffer, { contentType: mimeType, upsert: false })
+
+  if (error) throw new Error(`Storage upload failed: ${error.message}`)
+
+  const { data } = supabase.storage.from('feedback-images').getPublicUrl(path)
+  return data.publicUrl
+}
+
 async function handlePost(req: VercelRequest, res: VercelResponse) {
   try {
-    const { projectKey, projectId, pageUrl, selector, x, y, body } = req.body ?? {}
+    const { projectKey, projectId, pageUrl, selector, x, y, body, imageBase64, imageMimeType } = req.body ?? {}
     const resolvedProjectKey = typeof projectKey === 'string' ? projectKey : projectId
 
     if (!resolvedProjectKey || !pageUrl || !selector || !body) {
@@ -65,6 +87,15 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
     if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) {
       return jsonError(req, res, 400, 'x and y must be finite numbers')
+    }
+
+    if (imageBase64 !== undefined) {
+      if (typeof imageBase64 !== 'string' || typeof imageMimeType !== 'string') {
+        return jsonError(req, res, 400, 'imageBase64 and imageMimeType must both be strings')
+      }
+      if (!ALLOWED_IMAGE_TYPES.has(imageMimeType)) {
+        return jsonError(req, res, 400, 'imageMimeType must be image/png, image/jpeg, image/webp, or image/gif')
+      }
     }
 
     const project = await getProject(resolvedProjectKey)
@@ -76,6 +107,11 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
       return jsonError(req, res, 403, 'Origin not allowed for this project')
     }
 
+    let imageUrl: string | null = null
+    if (imageBase64 && imageMimeType) {
+      imageUrl = await uploadImage(resolvedProjectKey, imageMimeType, imageBase64)
+    }
+
     const comment = await createPublicComment({
       projectKey: resolvedProjectKey,
       pageUrl,
@@ -83,6 +119,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
       x,
       y,
       body,
+      imageUrl,
     })
 
     setCors(req, res, METHODS)

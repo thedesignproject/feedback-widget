@@ -43,6 +43,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",
     "framer-motion": "^12.38.0",
+    "html2canvas": "^1.4.1",
     "lucide-react": "^1.8.0"
   },
   "devDependencies": {
