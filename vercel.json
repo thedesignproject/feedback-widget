@@ -1,5 +1,6 @@
 {
   "buildCommand": "npm run typecheck && vite build --config demo/vite.config.ts",
+  "devCommand": "vite --config demo/vite.config.ts --port $PORT",
   "outputDirectory": "demo/dist",
   "functions": {
     "api/**/*.ts": {
@@ -7,13 +8,16 @@
       "maxDuration": 10
     }
   },
+  "rewrites": [
+    { "source": "/d/:slug", "destination": "/index.html" }
+  ],
   "headers": [
     {
       "source": "/api/(.*)",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, POST, PATCH, DELETE, OPTIONS" },
-        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization, X-Agent-Id, Idempotency-Key, X-Reviewer-Token, X-Share-Token, X-Smoke-Cleanup-Token" },
         { "key": "Access-Control-Max-Age", "value": "86400" }
       ]
     }

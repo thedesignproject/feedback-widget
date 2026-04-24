@@ -1,28 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Env vars must be set before handler import so getSupabase() doesn't throw
-process.env.SUPABASE_URL = 'https://test.supabase.co'
-process.env.SUPABASE_KEY = 'test-key'
-
-const mockSelect = vi.fn()
-const mockInsert = vi.fn()
-const mockUpdate = vi.fn()
-const mockEq = vi.fn()
-const mockOrder = vi.fn()
-const mockUpdateEq = vi.fn()
-const mockUpdateSelect = vi.fn()
-
-vi.mock('@supabase/supabase-js', () => ({
-  createClient: vi.fn(() => ({
-    from: vi.fn(() => ({
-      select: mockSelect,
-      insert: mockInsert,
-      update: mockUpdate,
-    })),
-  })),
+vi.mock('../../_lib/store.js', () => ({
+  getProject: vi.fn(),
+  createPublicComment: vi.fn(),
+  listComments: vi.fn(),
+  updateReviewStatus: vi.fn(),
 }))
 
-import handler from '../../../../api/v1/public/comments.js'
+import { createPublicComment, getProject, listComments, updateReviewStatus } from '../../_lib/store.js'
+import handler from './comments.js'
 
 interface MockRes {
   statusCode: number
@@ -64,23 +50,10 @@ const call = (req: unknown, res: unknown) =>
   (handler as unknown as (req: unknown, res: unknown) => Promise<unknown>)(req, res)
 
 beforeEach(() => {
-  mockSelect.mockReset()
-  mockInsert.mockReset()
-  mockUpdate.mockReset()
-  mockEq.mockReset()
-  mockOrder.mockReset()
-  mockUpdateEq.mockReset()
-  mockUpdateSelect.mockReset()
-
-  // Default chain for GET: from().select().eq().order()
-  mockOrder.mockResolvedValue({ data: [], error: null })
-  mockEq.mockReturnValue({ order: mockOrder })
-  mockSelect.mockReturnValue({ eq: mockEq })
-
-  // Default chain for PATCH: from().update().eq().select()
-  mockUpdateSelect.mockResolvedValue({ data: [], error: null })
-  mockUpdateEq.mockReturnValue({ select: mockUpdateSelect })
-  mockUpdate.mockReturnValue({ eq: mockUpdateEq })
+  vi.mocked(getProject).mockReset()
+  vi.mocked(createPublicComment).mockReset()
+  vi.mocked(listComments).mockReset()
+  vi.mocked(updateReviewStatus).mockReset()
 })
 
 describe('api/v1/public/comments', () => {
@@ -108,25 +81,47 @@ describe('api/v1/public/comments', () => {
     expect(res.headers['Access-Control-Allow-Origin']).toBe('*')
   })
 
-  it('returns 400 when required POST fields are missing', async () => {
+  it('returns 404 when the project key is unknown', async () => {
+    vi.mocked(getProject).mockResolvedValue(null)
     const res = mockRes()
-    await call(mockReq({ body: { projectKey: 'p' } }), res)
-    expect(res.statusCode).toBe(400)
+
+    await call(mockReq({
+      body: {
+        projectKey: 'missing',
+        pageUrl: 'https://example.com',
+        selector: 'body',
+        x: 10,
+        y: 20,
+        body: 'Hi',
+      },
+    }), res)
+
+    expect(res.statusCode).toBe(404)
   })
 
-  it('inserts a comment and returns 201', async () => {
-    const row = {
+  it('creates a public comment when the origin is allowed', async () => {
+    vi.mocked(getProject).mockResolvedValue({
+      publicKey: 'demo-project',
+      slug: 'demo-project',
+      name: 'Demo',
+      allowedOrigins: ['https://example.com'],
+      createdAt: '',
+      updatedAt: '',
+    })
+    vi.mocked(createPublicComment).mockResolvedValue({
       id: 'comment-1',
-      project_id: 'demo-project',
-      url: 'https://example.com',
-      element: 'body',
+      projectId: 'demo-project',
+      pageUrl: 'https://example.com',
+      selector: 'body',
       x: 10,
       y: 20,
-      comment: 'Hello',
-      created_at: '2026-04-22T00:00:00Z',
-    }
-    mockInsert.mockReturnValue({
-      select: vi.fn().mockResolvedValue({ data: [row], error: null }),
+      body: 'Hello',
+      reviewStatus: 'open',
+      implementationStatus: 'unassigned',
+      claimedByAgentId: null,
+      imageUrl: null,
+      createdAt: '',
+      updatedAt: '',
     })
 
     const res = mockRes()
@@ -143,24 +138,33 @@ describe('api/v1/public/comments', () => {
     }), res)
 
     expect(res.statusCode).toBe(201)
-    expect((res.body as Record<string, unknown>).projectId).toBe('demo-project')
-    expect((res.body as Record<string, unknown>).body).toBe('Hello')
-    expect((res.body as Record<string, unknown>).reviewStatus).toBe('open')
-  })
-
-  it('updates a comment review status', async () => {
-    const row = {
-      id: 'comment-1',
-      project_id: 'demo-project',
-      url: 'https://example.com',
-      element: 'body',
+    expect(createPublicComment).toHaveBeenCalledWith({
+      projectKey: 'demo-project',
+      pageUrl: 'https://example.com',
+      selector: 'body',
       x: 10,
       y: 20,
-      comment: 'Hello',
-      status: 'approved',
-      created_at: '2026-04-22T00:00:00Z',
-    }
-    mockUpdateSelect.mockResolvedValue({ data: [row], error: null })
+      body: 'Hello',
+      imageUrl: null,
+    })
+  })
+
+  it('updates a comment review status for widget compatibility', async () => {
+    vi.mocked(updateReviewStatus).mockResolvedValue({
+      id: 'comment-1',
+      projectId: 'demo-project',
+      pageUrl: 'https://example.com',
+      selector: 'body',
+      x: 10,
+      y: 20,
+      body: 'Hello',
+      reviewStatus: 'accepted',
+      implementationStatus: 'unassigned',
+      claimedByAgentId: null,
+      imageUrl: null,
+      createdAt: '',
+      updatedAt: '',
+    })
 
     const res = mockRes()
     await call(mockReq({
@@ -169,8 +173,7 @@ describe('api/v1/public/comments', () => {
       body: { id: 'comment-1', reviewStatus: 'accepted' },
     }), res)
 
-    expect(mockUpdate).toHaveBeenCalledWith({ status: 'approved' })
-    expect(mockUpdateEq).toHaveBeenCalledWith('id', 'comment-1')
+    expect(updateReviewStatus).toHaveBeenCalledWith('comment-1', 'accepted')
     expect(res.statusCode).toBe(200)
     expect((res.body as Record<string, unknown>).reviewStatus).toBe('accepted')
     expect(res.headers['Access-Control-Allow-Origin']).toBe('*')

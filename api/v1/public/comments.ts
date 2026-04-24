@@ -1,127 +1,130 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { createClient } from '@supabase/supabase-js'
-import { setCors } from '../../_cors.js'
+import { createPublicComment, getProject, listComments, updateReviewStatus } from '../../_lib/store.js'
+import { getStringQuery, handleOptions, isOriginAllowed, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
+import type { ReviewStatus } from '../../_lib/status.js'
+import { getSupabase } from '../../_lib/supabase.js'
 
-const SELECT_COLS = 'id, project_id, url, x, y, element, comment, status, created_at'
-type ReviewStatus = 'open' | 'accepted' | 'rejected'
+const METHODS = ['GET', 'POST', 'PATCH', 'OPTIONS']
+const VALID_STATUSES = new Set(['open', 'accepted', 'approved', 'rejected', 'pending'])
 
-function getSupabase() {
-  const url = process.env.SUPABASE_URL
-  const key = process.env.SUPABASE_KEY
-  if (!url || !key) throw new Error('Server misconfigured: missing Supabase credentials')
-  return createClient(url, key)
-}
-
-function reviewStatusFromDb(value: unknown): ReviewStatus {
-  if (value === 'approved' || value === 'accepted') return 'accepted'
+function normalizePatchStatus(value: unknown): ReviewStatus | null {
+  if (value === 'accepted' || value === 'approved') return 'accepted'
   if (value === 'rejected') return 'rejected'
-  return 'open'
-}
-
-function dbStatusFromReview(value: unknown) {
-  if (value === 'open' || value === 'pending') return 'pending'
-  if (value === 'accepted' || value === 'approved') return 'approved'
-  if (value === 'rejected') return 'rejected'
+  if (value === 'open' || value === 'pending') return 'open'
   return null
 }
 
-function mapRow(row: Record<string, unknown>) {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    pageUrl: row.url,
-    selector: row.element,
-    x: row.x,
-    y: row.y,
-    body: row.comment,
-    reviewStatus: reviewStatusFromDb(row.status),
-    createdAt: row.created_at,
-  }
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCors(req, res)
-  if (req.method === 'OPTIONS') return res.status(204).end()
+  if (handleOptions(req, res, METHODS)) return
   if (req.method === 'GET') return handleGet(req, res)
   if (req.method === 'POST') return handlePost(req, res)
   if (req.method === 'PATCH') return handlePatch(req, res)
-  return res.status(405).json({ error: 'Method not allowed' })
+  return methodNotAllowed(req, res, METHODS)
 }
 
 async function handleGet(req: VercelRequest, res: VercelResponse) {
   try {
-    const projectKey = typeof req.query.projectKey === 'string' ? req.query.projectKey : undefined
-    if (!projectKey) return res.status(400).json({ error: 'Missing projectKey' })
+    const projectKey = getStringQuery(req.query.projectKey)
+    if (!projectKey) return jsonError(req, res, 400, 'Missing projectKey')
 
-    const supabase = getSupabase()
-    const { data, error } = await supabase
-      .from('comments')
-      .select(SELECT_COLS)
-      .eq('project_id', projectKey)
-      .order('created_at', { ascending: false })
+    const pageUrl = getStringQuery(req.query.pageUrl)
+    const comments = await listComments(projectKey, pageUrl ? { pageUrl } : {})
 
-    if (error) return res.status(500).json({ error: error.message })
-    return res.status(200).json((data || []).map(mapRow))
+    setCors(req, res, METHODS)
+    return res.status(200).json(comments)
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : 'Unexpected error' })
+    return jsonError(req, res, 500, error instanceof Error ? error.message : 'Unexpected error')
   }
 }
 
 async function handlePatch(req: VercelRequest, res: VercelResponse) {
   try {
-    const { id, reviewStatus, status, body, comment } = req.body ?? {}
-    if (typeof id !== 'string' || !id) return res.status(400).json({ error: 'Missing id' })
+    const { id, reviewStatus, status } = req.body ?? {}
+    if (typeof id !== 'string' || !id) return jsonError(req, res, 400, 'Missing id')
 
-    const update: { status?: string; comment?: string } = {}
-    const nextStatus = dbStatusFromReview(reviewStatus ?? status)
-    if (nextStatus) update.status = nextStatus
-    if (typeof body === 'string') update.comment = body
-    if (typeof comment === 'string') update.comment = comment
-
-    if (Object.keys(update).length === 0) {
-      return res.status(400).json({ error: 'Missing fields to update' })
+    const nextStatus = normalizePatchStatus(reviewStatus ?? status)
+    if (!nextStatus || !VALID_STATUSES.has(String(reviewStatus ?? status))) {
+      return jsonError(req, res, 400, 'reviewStatus must be open, accepted, or rejected')
     }
 
-    const supabase = getSupabase()
-    const { data, error } = await supabase
-      .from('comments')
-      .update(update as never)
-      .eq('id', id)
-      .select(SELECT_COLS)
-
-    if (error) return res.status(500).json({ error: error.message })
-    if (!data || data.length === 0) return res.status(404).json({ error: 'Comment not found' })
-
-    return res.status(200).json(mapRow(data[0]))
+    const comment = await updateReviewStatus(id, nextStatus)
+    setCors(req, res, METHODS)
+    return res.status(200).json(comment)
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : 'Unexpected error' })
+    return jsonError(req, res, 500, error instanceof Error ? error.message : 'Unexpected error')
   }
+}
+
+const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
+
+async function uploadImage(projectKey: string, mimeType: string, base64Data: string): Promise<string> {
+  const buffer = Buffer.from(base64Data, 'base64')
+  if (buffer.byteLength > MAX_IMAGE_BYTES) throw new Error('Image exceeds 5 MB limit')
+
+  const ext = mimeType.split('/')[1] ?? 'png'
+  const path = `${projectKey}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+
+  const supabase = getSupabase()
+  const { error } = await supabase.storage
+    .from('feedback-images')
+    .upload(path, buffer, { contentType: mimeType, upsert: false })
+
+  if (error) throw new Error(`Storage upload failed: ${error.message}`)
+
+  const { data } = supabase.storage.from('feedback-images').getPublicUrl(path)
+  return data.publicUrl
 }
 
 async function handlePost(req: VercelRequest, res: VercelResponse) {
   try {
-    const { projectKey, projectId, pageUrl, selector, x, y, body } = req.body ?? {}
+    const { projectKey, projectId, pageUrl, selector, x, y, body, imageBase64, imageMimeType } = req.body ?? {}
     const resolvedProjectKey = typeof projectKey === 'string' ? projectKey : projectId
 
     if (!resolvedProjectKey || !pageUrl || !selector || !body) {
-      return res.status(400).json({ error: 'Missing required fields: projectKey, pageUrl, selector, body' })
+      return jsonError(req, res, 400, 'Missing required fields: projectKey, pageUrl, selector, body')
     }
 
     if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) {
-      return res.status(400).json({ error: 'x and y must be finite numbers' })
+      return jsonError(req, res, 400, 'x and y must be finite numbers')
     }
 
-    const supabase = getSupabase()
-    const { data, error } = await supabase
-      .from('comments')
-      .insert([{ project_id: resolvedProjectKey, url: pageUrl, x, y, element: selector, comment: body }] as never)
-      .select(SELECT_COLS)
+    if (imageBase64 !== undefined) {
+      if (typeof imageBase64 !== 'string' || typeof imageMimeType !== 'string') {
+        return jsonError(req, res, 400, 'imageBase64 and imageMimeType must both be strings')
+      }
+      if (!ALLOWED_IMAGE_TYPES.has(imageMimeType)) {
+        return jsonError(req, res, 400, 'imageMimeType must be image/png, image/jpeg, image/webp, or image/gif')
+      }
+    }
 
-    if (error) return res.status(500).json({ error: error.message })
-    if (!data || data.length === 0) return res.status(500).json({ error: 'Insert returned no row' })
+    const project = await getProject(resolvedProjectKey)
+    if (!project) {
+      return jsonError(req, res, 404, 'Project not found')
+    }
 
-    return res.status(201).json(mapRow(data[0]))
+    if (!isOriginAllowed(req, project)) {
+      return jsonError(req, res, 403, 'Origin not allowed for this project')
+    }
+
+    let imageUrl: string | null = null
+    if (imageBase64 && imageMimeType) {
+      imageUrl = await uploadImage(resolvedProjectKey, imageMimeType, imageBase64)
+    }
+
+    const comment = await createPublicComment({
+      projectKey: resolvedProjectKey,
+      pageUrl,
+      selector,
+      x,
+      y,
+      body,
+      imageUrl,
+    })
+
+    setCors(req, res, METHODS)
+    return res.status(201).json(comment)
   } catch (error) {
-    return res.status(500).json({ error: error instanceof Error ? error.message : 'Unexpected error' })
+    return jsonError(req, res, 500, error instanceof Error ? error.message : 'Unexpected error')
   }
 }

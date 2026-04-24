@@ -11,5 +11,5 @@
       "feedback-widget": ["./src/index.ts"]
     }
   },
-  "include": ["src", "api", "demo"]
+  "include": ["src", "api", "demo", "apps/dashboard"]
 }
