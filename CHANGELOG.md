@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-04-24
+
 ### Added
 - `api/comments.ts` handles both `GET` and `POST` on one route.
 - Handler unit tests (vitest) covering method dispatch, validation, and the silent-RLS failure mode.
