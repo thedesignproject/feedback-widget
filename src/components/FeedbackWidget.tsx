@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MessageCircle, LogOut, Menu, X, Bot } from 'lucide-react'
 import { VtooltipRoot, VtooltipItem, VtooltipTrigger, VtooltipContent } from './VTooltipMenu'
 import { getSelector } from '../lib/getSelector'
+import { useScreenshotCapture } from '../lib/screenshotCapture'
 import { AgentBridgeModal } from './AgentBridgeModal'
 
 interface FeedbackWidgetProps {
@@ -28,7 +29,54 @@ interface Comment {
   selector: string
   body: string
   reviewStatus: ReviewStatus
+  imageUrl?: string | null
   createdAt: string
+}
+
+function toPagePercent(pageX: number, pageY: number) {
+  const { scrollWidth, scrollHeight } = document.documentElement
+  return {
+    x: (pageX / scrollWidth) * 100,
+    y: (pageY / scrollHeight) * 100,
+  }
+}
+
+function fromPagePercent(x: number, y: number) {
+  const { scrollWidth, scrollHeight } = document.documentElement
+  // Legacy rows stored absolute pixels (often > 100). Fall back to pixel coords.
+  if (x > 100 || y > 100) {
+    return { pageX: x, pageY: y }
+  }
+  return {
+    pageX: (x / 100) * scrollWidth,
+    pageY: (y / 100) * scrollHeight,
+  }
+}
+
+// Anchor pin to its target element via stored selector. Falls back to percent/pixel
+// coords when the selector no longer resolves (DOM changed since capture).
+const STACK_OFFSET = 22 // px shift per additional pin sharing the same selector
+
+function pinPagePos(selector: string | undefined, x: number, y: number, stackIndex = 0): { pageX: number; pageY: number; anchored: boolean } {
+  if (selector) {
+    try {
+      const el = document.querySelector(selector) as HTMLElement | null
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          return {
+            pageX: rect.right + window.scrollX - stackIndex * STACK_OFFSET,
+            pageY: rect.top + window.scrollY,
+            anchored: true,
+          }
+        }
+      }
+    } catch {
+      // invalid selector — fall through
+    }
+  }
+  const { pageX, pageY } = fromPagePercent(x, y)
+  return { pageX, pageY, anchored: false }
 }
 
 const WIDGET_ATTR = 'data-fw'
@@ -85,6 +133,28 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   // Draggable pill state
   const [pillPos, setPillPos] = useState({ x: window.innerWidth - 72, y: window.innerHeight - 200 })
   const dragging = useRef(false)
+
+  // Re-render on resize / page reflow so fromPagePercent recalculates pin positions.
+  // ResizeObserver on body catches lazy content / images / accordions that grow scrollHeight.
+  const [, forceUpdate] = useState(0)
+  useEffect(() => {
+    function onResize() {
+      forceUpdate(n => n + 1)
+      setPillPos(prev => ({
+        x: Math.max(0, Math.min(window.innerWidth - 48, prev.x)),
+        y: Math.max(0, Math.min(window.innerHeight - 160, prev.y)),
+      }))
+    }
+    window.addEventListener('resize', onResize)
+
+    const ro = new ResizeObserver(() => forceUpdate(n => n + 1))
+    ro.observe(document.body)
+
+    return () => {
+      window.removeEventListener('resize', onResize)
+      ro.disconnect()
+    }
+  }, [])
   const dragOffset = useRef({ x: 0, y: 0 })
   const didDrag = useRef(false)
   const pillRef = useRef<HTMLDivElement>(null)
@@ -125,6 +195,8 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   // Synchronous guard — state updates are async, so double-firing handleSend
   // in the same tick (e.g. Cmd+Enter held down) would otherwise slip past `sending`.
   const sendingRef = useRef(false)
+
+  const { image, previewUrl: imagePreviewUrl, capture: captureImage, clear: clearImage, toBase64: encodeImage } = useScreenshotCapture()
 
   // --- Fetch comments on mount ---
   useEffect(() => {
@@ -193,13 +265,17 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       e.stopPropagation()
 
       setSelectedPin(null)
+      clearImage()
+      const pct = toPagePercent(e.pageX, e.pageY)
       setTarget({
         selector: getSelector(el),
-        x: e.pageX,
-        y: e.pageY,
+        x: pct.x,
+        y: pct.y,
         url: window.location.href,
       })
       setMode('commenting')
+
+      captureImage(el)
     }
 
     window.addEventListener('click', onClick, true)
@@ -224,17 +300,25 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     const targetData = { ...target }
 
     try {
+      const payload: Record<string, unknown> = {
+        projectKey: projectId,
+        pageUrl: targetData.url,
+        x: targetData.x,
+        y: targetData.y,
+        selector: targetData.selector,
+        body: commentText,
+      }
+
+      const encoded = await encodeImage()
+      if (encoded) {
+        payload.imageBase64 = encoded.base64
+        payload.imageMimeType = encoded.mimeType
+      }
+
       const res = await fetch(`${apiBase}/v1/public/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          projectKey: projectId,
-          pageUrl: targetData.url,
-          x: targetData.x,
-          y: targetData.y,
-          selector: targetData.selector,
-          body: commentText,
-        }),
+        body: JSON.stringify(payload),
       })
 
       if (!res.ok) {
@@ -242,8 +326,10 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         return
       }
 
+      const data = await res.json() as Partial<Comment>
+
       const newComment: Comment = {
-        id: crypto.randomUUID(),
+        id: data.id ?? crypto.randomUUID(),
         projectId,
         pageUrl: targetData.url,
         x: targetData.x,
@@ -251,7 +337,8 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         selector: targetData.selector,
         body: commentText,
         reviewStatus: 'open',
-        createdAt: new Date().toISOString(),
+        imageUrl: data.imageUrl ?? null,
+        createdAt: data.createdAt ?? new Date().toISOString(),
       }
 
       setComments((prev) => [newComment, ...prev])
@@ -261,6 +348,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
       setTarget(null)
       setComment('')
+      clearImage()
       setHovered(null)
       setMode('selecting')
     } catch (err) {
@@ -269,7 +357,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       sendingRef.current = false
       setSending(false)
     }
-  }, [comment, target, projectId, apiBase])
+  }, [comment, target, projectId, apiBase, encodeImage, clearImage])
 
   // --- Keyboard shortcuts ---
   useEffect(() => {
@@ -283,6 +371,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         } else if (mode === 'commenting') {
           setTarget(null)
           setComment('')
+          clearImage()
           setSending(false)
           setMode('selecting')
         } else if (mode === 'selecting') {
@@ -316,6 +405,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     setMode('idle')
     setTarget(null)
     setComment('')
+    clearImage()
     setSending(false)
     setHovered(null)
     setSelectedPin(null)
@@ -394,24 +484,25 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     }
   }
 
-  // --- Popover position (page-relative, converted to fixed via scroll offset) ---
+  // --- Popover position (% coords → page-absolute; clamp to viewport at open, anchor to page so it scrolls with pin) ---
   const popoverStyle = (): React.CSSProperties => {
     if (!target) return { display: 'none' }
     const pad = 16
     const popW = 300
     const popH = 180
-    const fixedX = target.x - window.scrollX
-    const fixedY = target.y - window.scrollY
-    let left = fixedX + pad
-    let top = fixedY + pad
-    if (left + popW > window.innerWidth) left = fixedX - popW - pad
-    if (top + popH > window.innerHeight) top = fixedY - popH - pad
-    if (left < pad) left = pad
-    if (top < pad) top = pad
+    const { pageX, pageY } = fromPagePercent(target.x, target.y)
+    const fixedX = pageX - window.scrollX
+    const fixedY = pageY - window.scrollY
+    let leftFixed = fixedX + pad
+    let topFixed = fixedY + pad
+    if (leftFixed + popW > window.innerWidth) leftFixed = fixedX - popW - pad
+    if (topFixed + popH > window.innerHeight) topFixed = fixedY - popH - pad
+    if (leftFixed < pad) leftFixed = pad
+    if (topFixed < pad) topFixed = pad
     return {
-      position: 'fixed',
-      left,
-      top,
+      position: 'absolute',
+      left: leftFixed + window.scrollX,
+      top: topFixed + window.scrollY,
       zIndex: 2147483646,
     }
   }
@@ -420,17 +511,18 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const pinPopoverStyle = (c: Comment): React.CSSProperties => {
     const pad = 16
     const popW = 280
-    const fixedX = c.x - window.scrollX
-    const fixedY = c.y - window.scrollY
-    let left = fixedX + pad
-    let top = fixedY - 20
-    if (left + popW > window.innerWidth) left = fixedX - popW - pad
-    if (left < pad) left = pad
-    if (top < pad) top = fixedY + 40
+    const { pageX, pageY } = pinPagePos(c.selector, c.x, c.y, stackIndices.get(c.id) ?? 0)
+    const fixedX = pageX - window.scrollX
+    const fixedY = pageY - window.scrollY
+    let leftFixed = fixedX + pad
+    let topFixed = fixedY - 20
+    if (leftFixed + popW > window.innerWidth) leftFixed = fixedX - popW - pad
+    if (leftFixed < pad) leftFixed = pad
+    if (topFixed < pad) topFixed = fixedY + 40
     return {
-      position: 'fixed',
-      left,
-      top,
+      position: 'absolute',
+      left: leftFixed + window.scrollX,
+      top: topFixed + window.scrollY,
       zIndex: 2147483646,
     }
   }
@@ -438,6 +530,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const cutoff = new Date('2026-04-19T00:00:00Z')
   const visibleComments = useMemo(() => comments.filter((c) => {
     if (new Date(c.createdAt) < cutoff) return false
+    if (c.reviewStatus === 'accepted') return false
     const commentUrl = c.pageUrl.split('?')[0].split('#')[0]
     return commentUrl === currentUrl
   }), [comments, currentUrl])
@@ -448,6 +541,18 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     return 0
   }), [visibleComments])
   const commentCount = visibleComments.length
+
+  // Per-comment stack index: pins sharing a selector cascade right so they don't overlap.
+  const stackIndices = useMemo(() => {
+    const m = new Map<string, number>()
+    const counts = new Map<string, number>()
+    for (const c of visibleComments) {
+      const n = counts.get(c.selector) ?? 0
+      m.set(c.id, n)
+      counts.set(c.selector, n + 1)
+    }
+    return m
+  }, [visibleComments])
 
   return (
     <div {...{ [WIDGET_ATTR]: '' }}>
@@ -532,6 +637,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             onClick={() => {
               setTarget(null)
               setComment('')
+              clearImage()
               setSending(false)
               setMode('selecting')
             }}
@@ -543,16 +649,16 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               ...popoverStyle(),
               display: 'flex',
               flexDirection: 'column',
-              width: comment.length > 0 ? 300 : 'auto',
+              width: comment.length > 0 || !!image ? 300 : 'auto',
               background: '#1e1e1e',
-              borderRadius: comment.length > 0 ? 14 : 9999,
-              padding: comment.length > 0 ? '10px 10px 6px' : '6px 6px 6px 10px',
+              borderRadius: comment.length > 0 || !!image ? 14 : 9999,
+              padding: comment.length > 0 || !!image ? '10px 10px 6px' : '6px 6px 6px 10px',
               fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
               transition: 'border-radius 0.2s, width 0.2s, padding 0.2s',
             }}
           >
             {/* Top row: avatar + input + send */}
-            <div style={{ display: 'flex', alignItems: comment.length > 0 ? 'flex-start' : 'center', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: comment.length > 0 || !!image ? 'flex-start' : 'center', gap: 10 }}>
               {/* Avatar */}
               <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#3b82f6', flexShrink: 0, marginTop: comment.length > 0 ? 2 : 0 }} />
               {/* Textarea (single row when empty, expands when typing) */}
@@ -565,7 +671,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                   if (e.key === 'Enter' && !e.shiftKey && comment.length === 0) { e.preventDefault() }
                 }}
                 placeholder="Add a comment"
-                rows={comment.length > 0 ? 3 : 1}
+                rows={comment.length > 0 || !!image ? 3 : 1}
                 style={{
                   flex: 1,
                   background: 'none',
@@ -608,8 +714,33 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               )}
             </div>
 
-            {/* Bottom toolbar (visible when typing) */}
-            {comment.length > 0 && (
+            {/* Screenshot thumbnail (auto-captured) */}
+            {imagePreviewUrl && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                marginTop: 6, paddingTop: 6, borderTop: '1px solid #333',
+              }}>
+                <img
+                  src={imagePreviewUrl}
+                  alt="captured element"
+                  style={{ height: 48, maxWidth: 100, objectFit: 'cover', borderRadius: 6, flexShrink: 0, border: '1px solid #333' }}
+                />
+                <span style={{ fontSize: 11, color: '#666', flex: 1 }}>Screenshot captured</span>
+                <button
+                  onClick={() => clearImage()}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#555', padding: 2, display: 'flex', flexShrink: 0 }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = '#555')}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            {/* Bottom toolbar (visible when typing or image captured) */}
+            {(comment.length > 0 || !!image) && (
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -639,17 +770,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="4" />
                       <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
-                    </svg>
-                  </button>
-                  {/* Image attachment */}
-                  <button style={{ width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', cursor: 'pointer', borderRadius: 6, color: '#888' }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = '#fff')}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = '#888')}
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                      <circle cx="8.5" cy="8.5" r="1.5" />
-                      <polyline points="21 15 16 10 5 21" />
                     </svg>
                   </button>
                 </div>
@@ -684,13 +804,15 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       )}
 
       {/* New comment pin at clicked position */}
-      {mode === 'commenting' && target && (
+      {mode === 'commenting' && target && (() => {
+        const { pageX, pageY } = fromPagePercent(target.x, target.y)
+        return (
         <div
           {...{ [WIDGET_ATTR]: '' }}
           style={{
             position: 'absolute',
-            left: target.x - 16,
-            top: target.y - 40,
+            left: pageX - 16,
+            top: pageY - 40,
             zIndex: 2147483646,
             pointerEvents: 'none',
           }}
@@ -702,10 +824,12 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             </text>
           </svg>
         </div>
-      )}
+        )
+      })()}
 
       {/* Persisted comment pins */}
       {visibleComments.map((c, i) => {
+        const { pageX: pinPageX, pageY: pinPageY } = pinPagePos(c.selector, c.x, c.y, stackIndices.get(c.id) ?? 0)
         const pinNumber = visibleComments.length - i
         const isSelected = selectedPin === c.id
         const isHovered = hoveredPin === c.id && !isSelected
@@ -725,8 +849,8 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               onMouseLeave={() => setHoveredPin(null)}
               style={{
                 position: 'absolute',
-                left: c.x - 16,
-                top: c.y - 40,
+                left: pinPageX - 16,
+                top: pinPageY - 40,
                 zIndex: isSelected ? 2147483646 : isHovered ? 2147483642 : 2147483640,
                 cursor: 'pointer',
                 transition: 'transform 0.15s',
@@ -746,8 +870,8 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               <div
                 style={{
                   position: 'absolute',
-                  left: c.x - 16,
-                  top: c.y - 78,
+                  left: pinPageX - 16,
+                  top: pinPageY - 78,
                   zIndex: 2147483643,
                   pointerEvents: 'none',
                   animation: 'fw-tooltip-in 0.15s ease both',
@@ -840,9 +964,19 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                     </div>
 
                     {/* Comment text */}
-                    <div style={{ fontSize: 14, lineHeight: 1.6, color: '#333', marginBottom: 14 }}>
+                    <div style={{ fontSize: 14, lineHeight: 1.6, color: '#333', marginBottom: c.imageUrl ? 10 : 14 }}>
                       {c.body}
                     </div>
+
+                    {/* Screenshot */}
+                    {c.imageUrl && (
+                      <img
+                        src={c.imageUrl}
+                        alt=""
+                        onClick={() => window.open(c.imageUrl!, '_blank')}
+                        style={{ width: '100%', borderRadius: 8, border: '1px solid #eee', cursor: 'zoom-in', display: 'block', marginBottom: 14 }}
+                      />
+                    )}
 
                     {/* Element chip */}
                     <div style={{
@@ -1011,12 +1145,22 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                         </div>
                       </div>
                     ) : (
-                      <div
-                        onClick={(e) => { e.stopPropagation(); setEditingId(c.id); setEditText(c.body) }}
-                        style={{ fontSize: 13, lineHeight: 1.4, color: '#ccc', cursor: 'text' }}
-                      >
-                        {c.body}
-                      </div>
+                      <>
+                        <div
+                          onClick={(e) => { e.stopPropagation(); setEditingId(c.id); setEditText(c.body) }}
+                          style={{ fontSize: 13, lineHeight: 1.4, color: '#ccc', cursor: 'text' }}
+                        >
+                          {c.body}
+                        </div>
+                        {c.imageUrl && (
+                          <img
+                            src={c.imageUrl}
+                            alt=""
+                            onClick={(e) => { e.stopPropagation(); window.open(c.imageUrl!, '_blank') }}
+                            style={{ marginTop: 8, maxWidth: '100%', borderRadius: 6, border: '1px solid #2a2a2a', cursor: 'zoom-in', display: 'block' }}
+                          />
+                        )}
+                      </>
                     )}
                   </div>
 

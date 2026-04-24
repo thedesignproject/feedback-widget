@@ -107,5 +107,34 @@ describe('api/v1/feedback-shares', () => {
       tokenUrl: 'https://app.example/api/v1/agent/shares/slug1234/state?token=token-123',
     })
   })
-})
 
+  it('derives generated URLs from the request host when APP_URL is not configured', async () => {
+    delete process.env.APP_URL
+    vi.mocked(listAcceptedCommentsForPage).mockResolvedValue([
+      { id: 'comment-1' },
+    ] as never)
+    vi.mocked(createShare).mockResolvedValue({
+      id: 'share-1',
+      slug: 'slug1234',
+      expiresAt: '2026-04-28T12:00:00.000Z',
+    } as never)
+
+    const res = mockRes()
+    await call(mockReq({
+      headers: {
+        'x-forwarded-host': 'feedback-widget-git-feat-dashboard-zen-redesign-designproject.vercel.app',
+        'x-forwarded-proto': 'https',
+      },
+      body: {
+        projectId: 'demo-project',
+        scopeType: 'page',
+        pageUrl: 'https://example.com/pricing',
+      },
+    }), res)
+
+    expect(res.statusCode).toBe(201)
+    expect(res.body).toMatchObject({
+      tokenUrl: 'https://feedback-widget-git-feat-dashboard-zen-redesign-designproject.vercel.app/api/v1/agent/shares/slug1234/state?token=token-123',
+    })
+  })
+})

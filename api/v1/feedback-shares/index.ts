@@ -2,11 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireReviewer } from '../../_lib/auth.js'
 import { createFeedbackEvent, createShare, addShareItems, listAcceptedCommentsByIds, listAcceptedCommentsForPage } from '../../_lib/store.js'
 import { generateAccessToken, generateSlug, hashToken, encryptToken } from '../../_lib/tokens.js'
-import { handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
-
-function appUrl() {
-  return process.env.APP_URL || 'http://localhost:3000'
-}
+import { getAppUrl, handleOptions, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleOptions(req, res, ['POST', 'OPTIONS'])) return
@@ -57,7 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     })
 
-    const tokenUrl = `${appUrl()}/api/v1/agent/shares/${share.slug}/state?token=${encodeURIComponent(token)}`
+    const tokenUrl = `${getAppUrl(req)}/api/v1/agent/shares/${share.slug}/state?token=${encodeURIComponent(token)}`
 
     setCors(req, res, ['POST', 'OPTIONS'])
     return res.status(201).json({
@@ -72,4 +68,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return jsonError(req, res, 500, error instanceof Error ? error.message : 'Unexpected error')
   }
 }
-

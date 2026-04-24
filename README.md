@@ -145,7 +145,10 @@ Required server variables:
 - `SUPABASE_KEY`
 - `REVIEWER_API_TOKEN`
 - `SHARE_TOKEN_SECRET`
-- `APP_URL`
+
+Optional server variables:
+
+- `APP_URL` - fallback for generated links when no request host is available
 
 Useful client variables:
 
