@@ -1,6 +1,6 @@
 {
   "name": "@thedesignproject/feedback-widget",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Visual feedback widget for React apps",
   "repository": {
     "type": "git",
