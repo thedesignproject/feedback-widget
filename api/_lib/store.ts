@@ -21,7 +21,6 @@ type ProjectRow = {
   public_key: string
   slug: string
   name: string
-  allowed_origins: string[] | null
   created_at: string
   updated_at: string
 }
@@ -94,7 +93,6 @@ function mapProject(row: ProjectRow) {
     publicKey: row.public_key,
     slug: row.slug,
     name: row.name,
-    allowedOrigins: row.allowed_origins || [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -158,7 +156,7 @@ export async function listProjects() {
   const supabase = getSupabase()
   const { data, error } = await supabase
     .from('projects')
-    .select('public_key, slug, name, allowed_origins, created_at, updated_at')
+    .select('public_key, slug, name, created_at, updated_at')
     .order('created_at', { ascending: true })
 
   if (error) throw new Error(error.message)
@@ -169,7 +167,7 @@ export async function getProject(projectKey: string) {
   const supabase = getSupabase()
   const { data, error } = await supabase
     .from('projects')
-    .select('public_key, slug, name, allowed_origins, created_at, updated_at')
+    .select('public_key, slug, name, created_at, updated_at')
     .eq('public_key', projectKey)
     .maybeSingle()
 

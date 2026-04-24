@@ -113,9 +113,9 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [pillPos, setPillPos] = useState({ x: window.innerWidth - 72, y: window.innerHeight - 200 })
   const dragging = useRef(false)
 
-  // Re-render on viewport resize, scroll, and body size changes so pins re-anchor
-  // to content reflow (lazy images, accordions, font swap). Safe to observe body
-  // because pins render position:fixed and don't contribute to scrollHeight.
+  // Pins/popovers use position:fixed, so their viewport coords must be recomputed
+  // on scroll (and on resize / body reflow, which shift the page-percent mapping).
+  // RAF-coalesced and gated by needsPositionSyncRef so idle pages stay cheap.
   const [, forceUpdate] = useState(0)
   const needsPositionSyncRef = useRef(false)
   useEffect(() => {
