@@ -67,7 +67,7 @@ const FAKE_COMMENTS: Comment[] = [
     reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
     createdAt: '2026-04-21T14:23:00Z', updatedAt: '2026-04-21T14:23:00Z',
     author: 'Dianne R.', authorInitial: 'D', authorColor: '#EC4899',
-    screenshotUrl: '/screenshots/marketeam-landing.png',
+    screenshotUrl: null,
   },
   {
     id: '2', projectId: 'hubsync', pageUrl: '/workspaces', selector: 'nav.header > ul.nav-items',
@@ -75,7 +75,7 @@ const FAKE_COMMENTS: Comment[] = [
     reviewStatus: 'accepted', implementationStatus: 'claimed', claimedByAgentId: 'claude-code',
     createdAt: '2026-04-21T13:15:00Z', updatedAt: '2026-04-21T15:30:00Z',
     author: 'Agustín V.', authorInitial: 'A', authorColor: '#6366F1',
-    screenshotUrl: '/screenshots/coursue-dashboard.png',
+    screenshotUrl: null,
   },
   {
     id: '3', projectId: 'hubsync', pageUrl: '/workspaces', selector: 'div.empty-state > img',
@@ -83,7 +83,7 @@ const FAKE_COMMENTS: Comment[] = [
     reviewStatus: 'accepted', implementationStatus: 'in_progress', claimedByAgentId: 'claude-code',
     createdAt: '2026-04-21T12:40:00Z', updatedAt: '2026-04-21T16:00:00Z',
     author: 'Agustín V.', authorInitial: 'A', authorColor: '#6366F1',
-    screenshotUrl: '/screenshots/healthcarousel-dashboard.png',
+    screenshotUrl: null,
   },
   {
     id: '4', projectId: 'hubsync', pageUrl: '/workspaces', selector: 'table.data-grid > tr:hover',
@@ -91,7 +91,7 @@ const FAKE_COMMENTS: Comment[] = [
     reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
     createdAt: '2026-04-21T11:55:00Z', updatedAt: '2026-04-21T11:55:00Z',
     author: 'Lara M.', authorInitial: 'L', authorColor: '#F59E0B',
-    screenshotUrl: '/screenshots/coreshift-integrations.png',
+    screenshotUrl: null,
   },
   {
     id: '5', projectId: 'hubsync', pageUrl: '/settings', selector: 'button.sync-now',
@@ -107,7 +107,7 @@ const FAKE_COMMENTS: Comment[] = [
     reviewStatus: 'accepted', implementationStatus: 'done', claimedByAgentId: 'claude-code',
     createdAt: '2026-04-20T16:20:00Z', updatedAt: '2026-04-21T09:00:00Z',
     author: 'Dianne R.', authorInitial: 'D', authorColor: '#EC4899',
-    screenshotUrl: '/screenshots/coursue-dashboard.png',
+    screenshotUrl: null,
   },
   {
     id: '7', projectId: 'hubsync', pageUrl: '/onboarding', selector: 'div.checklist',
@@ -123,7 +123,7 @@ const FAKE_COMMENTS: Comment[] = [
     reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
     createdAt: '2026-04-20T11:00:00Z', updatedAt: '2026-04-20T11:00:00Z',
     author: 'Agustín V.', authorInitial: 'A', authorColor: '#6366F1',
-    screenshotUrl: '/screenshots/marketeam-landing.png',
+    screenshotUrl: null,
   },
   {
     id: '9', projectId: 'hubsync', pageUrl: '/settings', selector: 'form.profile > input.email',
@@ -131,7 +131,7 @@ const FAKE_COMMENTS: Comment[] = [
     reviewStatus: 'accepted', implementationStatus: 'unassigned', claimedByAgentId: null,
     createdAt: '2026-04-19T18:00:00Z', updatedAt: '2026-04-21T10:00:00Z',
     author: 'Tomás O.', authorInitial: 'T', authorColor: '#10B981',
-    screenshotUrl: '/screenshots/coreshift-integrations.png',
+    screenshotUrl: null,
   },
 ]
 
