@@ -27,8 +27,16 @@ export async function captureElement(el: HTMLElement): Promise<Blob | null> {
       windowHeight: document.documentElement.offsetHeight,
       ignoreElements: (node) => node.hasAttribute('data-fw'),
     })
-    return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
-  } catch {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          console.warn('[FeedbackWidget] Screenshot capture failed: canvas.toBlob() returned null')
+        }
+        resolve(blob)
+      }, 'image/png')
+    })
+  } catch (error) {
+    console.warn('[FeedbackWidget] Screenshot capture failed:', error)
     return null
   }
 }
