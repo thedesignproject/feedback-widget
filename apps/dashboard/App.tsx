@@ -3,9 +3,9 @@ import { cn } from './lib/utils'
 
 // ─── Types ──────────────────────────────────────────────────────────
 
-type ReviewStatus = 'open' | 'approved' | 'dismissed'
-type ImplStatus = 'unassigned' | 'claimed' | 'in_progress' | 'blocked' | 'resolved'
-type StatusFilter = 'all' | 'open' | 'approved' | 'dismissed' | 'resolved'
+type ReviewStatus = 'open' | 'accepted' | 'rejected'
+type ImplStatus = 'unassigned' | 'claimed' | 'in_progress' | 'blocked' | 'done'
+type StatusFilter = 'all' | 'open' | 'accepted' | 'rejected' | 'done'
 
 interface Comment {
   id: string
@@ -72,7 +72,7 @@ const FAKE_COMMENTS: Comment[] = [
   {
     id: '2', projectId: 'hubsync', pageUrl: '/workspaces', selector: 'nav.header > ul.nav-items',
     x: 120, y: 45, body: 'Header nav items are too tight on tablet. On my iPad Pro, "Resources" and "Pricing" overlap.',
-    reviewStatus: 'approved', implementationStatus: 'claimed', claimedByAgentId: 'claude-code',
+    reviewStatus: 'accepted', implementationStatus: 'claimed', claimedByAgentId: 'claude-code',
     createdAt: '2026-04-21T13:15:00Z', updatedAt: '2026-04-21T15:30:00Z',
     author: 'Agustín V.', authorInitial: 'A', authorColor: '#6366F1',
     screenshotUrl: '/screenshots/coursue-dashboard.png',
@@ -80,7 +80,7 @@ const FAKE_COMMENTS: Comment[] = [
   {
     id: '3', projectId: 'hubsync', pageUrl: '/workspaces', selector: 'div.empty-state > img',
     x: 400, y: 320, body: 'Empty state illustration looks off-brand. Can we swap for the new abstract set from the library?',
-    reviewStatus: 'approved', implementationStatus: 'in_progress', claimedByAgentId: 'claude-code',
+    reviewStatus: 'accepted', implementationStatus: 'in_progress', claimedByAgentId: 'claude-code',
     createdAt: '2026-04-21T12:40:00Z', updatedAt: '2026-04-21T16:00:00Z',
     author: 'Agustín V.', authorInitial: 'A', authorColor: '#6366F1',
     screenshotUrl: '/screenshots/healthcarousel-dashboard.png',
@@ -96,7 +96,7 @@ const FAKE_COMMENTS: Comment[] = [
   {
     id: '5', projectId: 'hubsync', pageUrl: '/settings', selector: 'button.sync-now',
     x: 560, y: 290, body: '"Sync now" button is too small — I keep missing the tap target on mobile.',
-    reviewStatus: 'dismissed', implementationStatus: 'unassigned', claimedByAgentId: null,
+    reviewStatus: 'rejected', implementationStatus: 'unassigned', claimedByAgentId: null,
     createdAt: '2026-04-21T10:30:00Z', updatedAt: '2026-04-21T14:00:00Z',
     author: 'Tomás O.', authorInitial: 'T', authorColor: '#10B981',
     screenshotUrl: null,
@@ -104,7 +104,7 @@ const FAKE_COMMENTS: Comment[] = [
   {
     id: '6', projectId: 'hubsync', pageUrl: '/workspaces', selector: 'div.tooltip',
     x: 480, y: 150, body: 'Tooltip is clipped at the edge of the viewport — needs collision detection.',
-    reviewStatus: 'approved', implementationStatus: 'resolved', claimedByAgentId: 'claude-code',
+    reviewStatus: 'accepted', implementationStatus: 'done', claimedByAgentId: 'claude-code',
     createdAt: '2026-04-20T16:20:00Z', updatedAt: '2026-04-21T09:00:00Z',
     author: 'Dianne R.', authorInitial: 'D', authorColor: '#EC4899',
     screenshotUrl: '/screenshots/coursue-dashboard.png',
@@ -128,7 +128,7 @@ const FAKE_COMMENTS: Comment[] = [
   {
     id: '9', projectId: 'hubsync', pageUrl: '/settings', selector: 'form.profile > input.email',
     x: 420, y: 200, body: 'Email validation error message appears below the fold. User has to scroll to see it.',
-    reviewStatus: 'approved', implementationStatus: 'unassigned', claimedByAgentId: null,
+    reviewStatus: 'accepted', implementationStatus: 'unassigned', claimedByAgentId: null,
     createdAt: '2026-04-19T18:00:00Z', updatedAt: '2026-04-21T10:00:00Z',
     author: 'Tomás O.', authorInitial: 'T', authorColor: '#10B981',
     screenshotUrl: '/screenshots/coreshift-integrations.png',
@@ -138,7 +138,7 @@ const FAKE_COMMENTS: Comment[] = [
 const FAKE_AGENT_EVENTS: AgentEvent[] = [
   { id: 1, type: 'claim', description: 'Claimed comment: "Sync now button too small"', timestamp: '2026-04-21T16:02:00Z', agentId: 'claude-code' },
   { id: 2, type: 'connect', description: 'Connected to share /shares/rf2-q3c3e', timestamp: '2026-04-21T16:00:00Z', agentId: 'claude-code' },
-  { id: 3, type: 'resolve', description: 'Resolved · replaced illustration asset', timestamp: '2026-04-21T15:55:00Z', agentId: 'claude-code' },
+  { id: 3, type: 'done', description: 'Done · replaced illustration asset', timestamp: '2026-04-21T15:55:00Z', agentId: 'claude-code' },
   { id: 4, type: 'file', description: '1 file (feat/fix): swap empty-state illustration', timestamp: '2026-04-21T15:54:00Z', agentId: 'claude-code' },
 ]
 
@@ -157,13 +157,13 @@ function truncateUrl(url: string) {
 }
 
 function isInactive(c: Comment) {
-  return c.reviewStatus === 'dismissed' || c.implementationStatus === 'resolved'
+  return c.reviewStatus === 'rejected' || c.implementationStatus === 'done'
 }
 
 const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
   open: 'Open',
-  approved: 'Approved',
-  dismissed: 'Dismissed',
+  accepted: 'Accepted',
+  rejected: 'Rejected',
 }
 
 const IMPL_STATUS_LABELS: Record<ImplStatus, string> = {
@@ -171,7 +171,7 @@ const IMPL_STATUS_LABELS: Record<ImplStatus, string> = {
   claimed: 'Claimed',
   in_progress: 'In progress',
   blocked: 'Blocked',
-  resolved: 'Resolved',
+  done: 'Done',
 }
 
 const IMPL_STATUS_COLORS: Record<ImplStatus, string> = {
@@ -179,7 +179,7 @@ const IMPL_STATUS_COLORS: Record<ImplStatus, string> = {
   claimed: 'bg-status-claimed-bg text-status-claimed',
   in_progress: 'bg-status-in-progress-bg text-status-in-progress',
   blocked: 'bg-status-blocked-bg text-status-blocked',
-  resolved: 'bg-status-done-bg text-status-done',
+  done: 'bg-status-done-bg text-status-done',
 }
 
 // ─── App ────────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ export function App() {
 
   const filteredComments = useMemo(() => {
     const filtered = statusFilter === 'all' ? projectComments
-      : statusFilter === 'resolved' ? projectComments.filter((c) => c.implementationStatus === 'resolved')
+      : statusFilter === 'done' ? projectComments.filter((c) => c.implementationStatus === 'done')
       : projectComments.filter((c) => c.reviewStatus === statusFilter)
 
     return [...filtered].sort((a, b) => Number(isInactive(a)) - Number(isInactive(b)))
@@ -221,27 +221,27 @@ export function App() {
     (acc, c) => {
       acc.all++
       if (c.reviewStatus === 'open') acc.open++
-      else if (c.reviewStatus === 'approved') acc.approved++
-      else if (c.reviewStatus === 'dismissed') acc.dismissed++
-      if (c.implementationStatus === 'resolved') acc.resolved++
+      else if (c.reviewStatus === 'accepted') acc.accepted++
+      else if (c.reviewStatus === 'rejected') acc.rejected++
+      if (c.implementationStatus === 'done') acc.done++
       return acc
     },
-    { all: 0, open: 0, approved: 0, dismissed: 0, resolved: 0 },
+    { all: 0, open: 0, accepted: 0, rejected: 0, done: 0 },
   ), [projectComments])
 
   const handleReviewStatus = useCallback((id: string, status: ReviewStatus) => {
     setComments((prev) => prev.map((c) => c.id === id ? { ...c, reviewStatus: status, updatedAt: new Date().toISOString() } : c))
   }, [])
 
-  const handleToggleResolved = useCallback((id: string) => {
+  const handleToggleDone = useCallback((id: string) => {
     setComments((prev) => prev.map((c) => c.id === id ? {
       ...c,
-      implementationStatus: (c.implementationStatus === 'resolved' ? 'unassigned' : 'resolved') as ImplStatus,
+      implementationStatus: (c.implementationStatus === 'done' ? 'unassigned' : 'done') as ImplStatus,
       updatedAt: new Date().toISOString(),
     } : c))
   }, [])
 
-  const toggleReview = useCallback((c: Comment, target: 'approved' | 'dismissed') => {
+  const toggleReview = useCallback((c: Comment, target: 'accepted' | 'rejected') => {
     handleReviewStatus(c.id, c.reviewStatus === target ? 'open' : target)
   }, [handleReviewStatus])
 
@@ -280,9 +280,9 @@ export function App() {
       if (e.key === ' ') { e.preventDefault(); goNext() }
 
       if (selectedComment) {
-        if (e.key === 'a') toggleReview(selectedComment, 'approved')
-        if (e.key === 'd') toggleReview(selectedComment, 'dismissed')
-        if (e.key === 'm') handleToggleResolved(selectedComment.id)
+        if (e.key === 'a') toggleReview(selectedComment, 'accepted')
+        if (e.key === 'd') toggleReview(selectedComment, 'rejected')
+        if (e.key === 'm') handleToggleDone(selectedComment.id)
       }
 
       if (e.key === 's') setSidebarOpen((v) => !v)
@@ -290,24 +290,30 @@ export function App() {
 
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [goNext, goPrev, selectedComment, toggleReview, handleToggleResolved, cmdOpen])
+  }, [goNext, goPrev, selectedComment, toggleReview, handleToggleDone, cmdOpen])
 
   const handleCmdSelect = useCallback((commentId: string) => {
     setSelectedCommentId(commentId)
     setCmdOpen(false)
   }, [])
 
+  const selectFilter = useCallback((filter: StatusFilter) => {
+    setStatusFilter(filter)
+    setSelectedCommentId('')
+  }, [])
+
   const handleCmdAction = useCallback((action: string) => {
     if (action === 'toggle-sidebar') setSidebarOpen((v) => !v)
-    if (action === 'filter-all') setStatusFilter('all')
-    if (action === 'filter-open') setStatusFilter('open')
-    if (action === 'filter-approved') setStatusFilter('approved')
-    if (action === 'filter-dismissed') setStatusFilter('dismissed')
-    if (selectedComment && action === 'approve') toggleReview(selectedComment, 'approved')
-    if (selectedComment && action === 'dismiss') toggleReview(selectedComment, 'dismissed')
-    if (selectedComment && action === 'resolve') handleToggleResolved(selectedComment.id)
+    if (action === 'filter-all') selectFilter('all')
+    if (action === 'filter-open') selectFilter('open')
+    if (action === 'filter-accepted') selectFilter('accepted')
+    if (action === 'filter-rejected') selectFilter('rejected')
+    if (action === 'filter-done') selectFilter('done')
+    if (selectedComment && action === 'accept') toggleReview(selectedComment, 'accepted')
+    if (selectedComment && action === 'reject') toggleReview(selectedComment, 'rejected')
+    if (selectedComment && action === 'done') handleToggleDone(selectedComment.id)
     setCmdOpen(false)
-  }, [selectedComment, toggleReview, handleToggleResolved])
+  }, [selectedComment, toggleReview, handleToggleDone, selectFilter])
 
   const handleAddProject = useCallback((name: string) => {
     const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
@@ -361,7 +367,7 @@ export function App() {
             </button>
           ))}
 
-          <div className="relative">
+          <div data-add-project className="relative">
             <button
               onClick={() => setAddProjectOpen((v) => !v)}
               className={cn(
@@ -416,12 +422,12 @@ export function App() {
               </button>
             </div>
             <div className="flex gap-1">
-              {(['all', 'open', 'approved', 'dismissed', 'resolved'] as StatusFilter[]).map((f) => {
+              {(['all', 'open', 'accepted', 'rejected', 'done'] as StatusFilter[]).map((f) => {
                 const count = counts[f as keyof typeof counts] ?? 0
                 return (
                   <button
                     key={f}
-                    onClick={() => { setStatusFilter(f); setSelectedCommentId('') }}
+                    onClick={() => selectFilter(f)}
                     className={cn(
                       'px-2.5 py-1 rounded-md text-[11px] font-semibold capitalize transition-all',
                       statusFilter === f
@@ -457,9 +463,9 @@ export function App() {
                 const isActive = comment.id === selectedCommentId
                 const inactive = isInactive(comment)
                 const borderColor =
-                  comment.implementationStatus === 'resolved' ? 'border-l-status-done' :
-                  comment.reviewStatus === 'approved' ? 'border-l-status-accepted' :
-                  comment.reviewStatus === 'dismissed' ? 'border-l-status-rejected' :
+                  comment.implementationStatus === 'done' ? 'border-l-status-done' :
+                  comment.reviewStatus === 'accepted' ? 'border-l-status-accepted' :
+                  comment.reviewStatus === 'rejected' ? 'border-l-status-rejected' :
                   'border-l-transparent'
 
                 return (
@@ -528,8 +534,8 @@ export function App() {
                   <span>·</span>
                   <span className={cn(
                     'font-semibold',
-                    selectedComment.reviewStatus === 'approved' ? 'text-status-accepted' :
-                    selectedComment.reviewStatus === 'dismissed' ? 'text-status-rejected' :
+                    selectedComment.reviewStatus === 'accepted' ? 'text-status-accepted' :
+                    selectedComment.reviewStatus === 'rejected' ? 'text-status-rejected' :
                     'text-muted-foreground'
                   )}>
                     {REVIEW_STATUS_LABELS[selectedComment.reviewStatus]}
@@ -560,13 +566,15 @@ export function App() {
                         className="absolute pointer-events-none"
                         style={{ left: `${(selectedComment.x / 700) * 100}%`, top: `${(selectedComment.y / 500) * 100}%` }}
                       >
-                        <div className="relative -translate-x-1/2 -translate-y-1/2 pin-marker pin-float">
-                          <div className="absolute inset-0 rounded-full animate-pulse-ring" style={{ background: selectedComment.authorColor, opacity: 0.3 }} />
-                          <div
-                            className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold pin-dot-shadow border-2 border-white/90"
-                            style={{ background: `linear-gradient(135deg, ${selectedComment.authorColor}, ${selectedComment.authorColor}99)` }}
-                          >
-                            {selectedComment.authorInitial}
+                        <div className="relative -translate-x-1/2 -translate-y-1/2 pin-marker">
+                          <div className="pin-float">
+                            <div className="absolute inset-0 rounded-full animate-pulse-ring" style={{ background: selectedComment.authorColor, opacity: 0.3 }} />
+                            <div
+                              className="w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-bold pin-dot-shadow border-2 border-white/90"
+                              style={{ background: `linear-gradient(135deg, ${selectedComment.authorColor}, ${selectedComment.authorColor}99)` }}
+                            >
+                              {selectedComment.authorInitial}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -619,31 +627,31 @@ export function App() {
               <div className="shrink-0 border-t border-border bg-card px-6 py-3">
                 <div className="flex items-center gap-2 max-w-2xl mx-auto">
                   <ActionBtn
-                    active={selectedComment.reviewStatus === 'approved'}
+                    active={selectedComment.reviewStatus === 'accepted'}
                     variant="accept"
-                    onClick={() => toggleReview(selectedComment, 'approved')}
+                    onClick={() => toggleReview(selectedComment, 'accepted')}
                     shortcut="A"
                   >
-                    <CheckIcon size={14} /> Approve
+                    <CheckIcon size={14} /> Accept
                   </ActionBtn>
                   <ActionBtn
-                    active={selectedComment.reviewStatus === 'dismissed'}
+                    active={selectedComment.reviewStatus === 'rejected'}
                     variant="reject"
-                    onClick={() => toggleReview(selectedComment, 'dismissed')}
+                    onClick={() => toggleReview(selectedComment, 'rejected')}
                     shortcut="D"
                   >
-                    <XIcon size={14} /> Dismiss
+                    <XIcon size={14} /> Reject
                   </ActionBtn>
 
                   <div className="w-px h-5 bg-border mx-1" />
 
                   <ActionBtn
-                    active={selectedComment.implementationStatus === 'resolved'}
-                    variant="resolve"
-                    onClick={() => handleToggleResolved(selectedComment.id)}
+                    active={selectedComment.implementationStatus === 'done'}
+                    variant="done"
+                    onClick={() => handleToggleDone(selectedComment.id)}
                     shortcut="M"
                   >
-                    <ResolveIcon size={14} /> {selectedComment.implementationStatus === 'resolved' ? 'Resolved' : 'Mark resolved'}
+                    <DoneIcon size={14} /> {selectedComment.implementationStatus === 'done' ? 'Done' : 'Mark done'}
                   </ActionBtn>
 
                   <div className="w-px h-5 bg-border mx-1" />
@@ -686,9 +694,9 @@ export function App() {
               <div className="flex gap-3 mt-6 text-xs text-muted-foreground font-mono">
                 <Kbd>J</Kbd><Kbd>K</Kbd> navigate
                 <span className="mx-1">·</span>
-                <Kbd>A</Kbd> approve
+                <Kbd>A</Kbd> accept
                 <span className="mx-1">·</span>
-                <Kbd>D</Kbd> dismiss
+                <Kbd>D</Kbd> reject
               </div>
             </div>
           )}
@@ -721,10 +729,10 @@ export function App() {
               <div className="mt-3 rounded-md bg-muted/60 border border-border px-3 py-2.5">
                 <p className="text-[11px] text-foreground font-medium mb-1.5">How it works</p>
                 <ol className="text-[10px] text-muted-foreground leading-relaxed space-y-1 list-decimal list-inside">
-                  <li>You review feedback and mark items as <span className="text-status-accepted font-semibold">Approved</span></li>
+                  <li>You review feedback and mark items as <span className="text-status-accepted font-semibold">Accepted</span></li>
                   <li>Copy this link and paste it into any AI agent</li>
-                  <li>The agent only sees <span className="text-status-accepted font-semibold">approved</span> items — nothing else</li>
-                  <li>It claims, fixes, and marks them <span className="text-status-done font-semibold">Resolved</span></li>
+                  <li>The agent only sees <span className="text-status-accepted font-semibold">accepted</span> items — nothing else</li>
+                  <li>It claims, fixes, and marks them <span className="text-status-done font-semibold">Done</span></li>
                 </ol>
               </div>
             </div>
@@ -749,7 +757,12 @@ export function App() {
                 </button>
                 {agentDropdownOpen && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setAgentDropdownOpen(false)} />
+                    <button
+                      type="button"
+                      aria-label="Close agent selector"
+                      className="fixed inset-0 z-40 cursor-default"
+                      onClick={() => setAgentDropdownOpen(false)}
+                    />
                     <div className="absolute top-full left-0 right-0 mt-1.5 rounded-lg border border-border bg-card shadow-xl shadow-black/30 z-50 py-1 cmd-modal-enter">
                       {AGENTS.map((agent) => (
                         <button
@@ -807,7 +820,7 @@ export function App() {
                     <div className="mt-1.5 shrink-0">
                       <div className={cn(
                         'w-2 h-2 rounded-full',
-                        ev.type === 'resolve' ? 'bg-status-accepted' :
+                        ev.type === 'done' ? 'bg-status-accepted' :
                         ev.type === 'claim' ? 'bg-status-claimed' :
                         ev.type === 'file' ? 'bg-status-in-progress' :
                         'bg-muted-foreground/30'
@@ -827,9 +840,9 @@ export function App() {
 
       {/* ── Status Bar ── */}
       <footer className="flex items-center gap-5 px-5 h-[32px] shrink-0 border-t border-border bg-card text-[10px] font-mono text-muted-foreground">
-        <span><Kbd>A</Kbd> approve</span>
-        <span><Kbd>D</Kbd> dismiss</span>
-        <span><Kbd>M</Kbd> resolve</span>
+        <span><Kbd>A</Kbd> accept</span>
+        <span><Kbd>D</Kbd> reject</span>
+        <span><Kbd>M</Kbd> done</span>
         <span><Kbd>Space</Kbd> next</span>
         <span><Kbd>J</Kbd>/<Kbd>K</Kbd> nav</span>
         <span><Kbd>S</Kbd> sidebar</span>
@@ -861,14 +874,15 @@ type CmdIconType = 'comment' | 'check' | 'x' | 'filter' | 'sidebar'
 type CmdItem = { id: string; type: 'comment' | 'action'; label: string; detail: string; icon: CmdIconType }
 
 const CMD_ACTIONS: CmdItem[] = [
-  { id: 'approve', type: 'action', label: 'Toggle approve', detail: 'A', icon: 'check' },
-  { id: 'dismiss', type: 'action', label: 'Toggle dismiss', detail: 'D', icon: 'x' },
-  { id: 'resolve', type: 'action', label: 'Toggle resolved', detail: 'M', icon: 'check' },
+  { id: 'accept', type: 'action', label: 'Toggle accept', detail: 'A', icon: 'check' },
+  { id: 'reject', type: 'action', label: 'Toggle reject', detail: 'D', icon: 'x' },
+  { id: 'done', type: 'action', label: 'Toggle done', detail: 'M', icon: 'check' },
   { id: 'toggle-sidebar', type: 'action', label: 'Toggle agent panel', detail: 'S', icon: 'sidebar' },
   { id: 'filter-all', type: 'action', label: 'Filter: Show all', detail: '', icon: 'filter' },
   { id: 'filter-open', type: 'action', label: 'Filter: Open only', detail: '', icon: 'filter' },
-  { id: 'filter-approved', type: 'action', label: 'Filter: Approved only', detail: '', icon: 'filter' },
-  { id: 'filter-dismissed', type: 'action', label: 'Filter: Dismissed only', detail: '', icon: 'filter' },
+  { id: 'filter-accepted', type: 'action', label: 'Filter: Accepted only', detail: '', icon: 'filter' },
+  { id: 'filter-rejected', type: 'action', label: 'Filter: Rejected only', detail: '', icon: 'filter' },
+  { id: 'filter-done', type: 'action', label: 'Filter: Done only', detail: '', icon: 'filter' },
 ]
 
 interface CommandPaletteProps {
@@ -919,8 +933,6 @@ function CommandPalette({ onClose, comments, onSelect, onAction, selectedComment
     return q ? [...matchedComments, ...matchedActions] : [...matchedActions, ...matchedComments]
   }, [query, comments])
 
-  useEffect(() => { setActiveIdx(0) }, [query])
-
   useEffect(() => {
     const list = listRef.current
     if (!list) return
@@ -952,7 +964,9 @@ function CommandPalette({ onClose, comments, onSelect, onAction, selectedComment
 
   return (
     <div className="fixed inset-0 z-50 flex justify-center pt-[20vh]">
-      <div
+      <button
+        type="button"
+        aria-label="Close command palette"
         className="absolute inset-0 bg-background/60 backdrop-blur-sm cmd-backdrop-enter"
         onClick={onClose}
       />
@@ -963,7 +977,10 @@ function CommandPalette({ onClose, comments, onSelect, onAction, selectedComment
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setActiveIdx(0)
+            }}
             onKeyDown={handleKeyDown}
             placeholder="Search feedback, jump to comment, or run action…"
             className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
@@ -1149,8 +1166,8 @@ function StatusBadge({ status }: { status: ReviewStatus }) {
   return (
     <span className={cn(
       'inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold',
-      status === 'approved' && 'bg-status-accepted-bg text-status-accepted',
-      status === 'dismissed' && 'bg-status-rejected-bg text-status-rejected',
+      status === 'accepted' && 'bg-status-accepted-bg text-status-accepted',
+      status === 'rejected' && 'bg-status-rejected-bg text-status-rejected',
       status === 'open' && 'bg-status-open-bg text-status-open',
     )}>
       {REVIEW_STATUS_LABELS[status]}
@@ -1168,7 +1185,7 @@ function ImplBadge({ status }: { status: ImplStatus }) {
 
 function ActionBtn({ children, variant, active, onClick, shortcut, disabled }: {
   children: React.ReactNode
-  variant: 'accept' | 'reject' | 'neutral' | 'resolve'
+  variant: 'accept' | 'reject' | 'neutral' | 'done'
   active?: boolean
   onClick?: () => void
   shortcut?: string
@@ -1191,7 +1208,7 @@ function ActionBtn({ children, variant, active, onClick, shortcut, disabled }: {
           ? 'bg-status-rejected text-white'
           : 'border border-border bg-card text-foreground hover:bg-status-rejected-bg hover:text-status-rejected hover:border-status-rejected/30'
         ),
-        variant === 'resolve' && (active
+        variant === 'done' && (active
           ? 'bg-status-done text-white'
           : 'border border-border bg-card text-foreground hover:bg-status-done-bg hover:text-status-done hover:border-status-done/30'
         ),
@@ -1261,7 +1278,7 @@ function BotIcon({ size = 16, className }: { size?: number; className?: string }
   )
 }
 
-function ResolveIcon({ size = 16 }: { size?: number }) {
+function DoneIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 11.08V12a10 10 0 11-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
