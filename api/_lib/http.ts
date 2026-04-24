@@ -75,6 +75,28 @@ export function getReviewerToken(req: VercelRequest): string | undefined {
   return typeof reviewer === 'string' && reviewer.length > 0 ? reviewer : undefined
 }
 
+function firstHeaderValue(value: string | string[] | undefined) {
+  const raw = Array.isArray(value) ? value[0] : value
+  if (!raw) return undefined
+  return raw.split(',')[0]?.trim() || undefined
+}
+
+export function getAppUrl(req: VercelRequest): string {
+  const host = firstHeaderValue(req.headers['x-forwarded-host'])
+    || firstHeaderValue(req.headers.host)
+    || process.env.VERCEL_URL
+
+  if (host) {
+    const normalizedHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '')
+    const proto = firstHeaderValue(req.headers['x-forwarded-proto'])
+      || (normalizedHost.startsWith('localhost') || normalizedHost.startsWith('127.0.0.1') ? 'http' : 'https')
+
+    return `${proto}://${normalizedHost}`.replace(/\/$/, '')
+  }
+
+  return (process.env.APP_URL || 'http://localhost:3000').replace(/\/$/, '')
+}
+
 export function getAgentId(req: VercelRequest): string | undefined {
   const header = req.headers['x-agent-id']
   if (typeof header === 'string' && header.length > 0) {

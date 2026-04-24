@@ -1,12 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../_lib/http.js'
+import { getAppUrl, getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../_lib/http.js'
 import { getProject, getRepoConfig } from '../../../_lib/store.js'
 import { buildPrompt } from '../../../_lib/prompts.js'
 import { requireAgentShare } from '../../../_lib/shares.js'
-
-function appUrl() {
-  return process.env.APP_URL || 'http://localhost:3000'
-}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleOptions(req, res, ['GET', 'OPTIONS'])) return
@@ -24,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!project) return jsonError(req, res, 404, 'Project not found')
 
     const repoConfig = await getRepoConfig(authorized.share.projectId)
-    const base = appUrl()
+    const base = getAppUrl(req)
     const prompt = buildPrompt(target, {
       appUrl: base,
       slug: authorized.share.slug,

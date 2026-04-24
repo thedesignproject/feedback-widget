@@ -2,11 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createShare, getProject, getProjectShare } from '../../_lib/store.js'
 import { encryptToken, generateAccessToken, generateSlug, hashToken } from '../../_lib/tokens.js'
 import { decryptToken } from '../../_lib/tokens.js'
-import { getStringQuery, handleOptions, isOriginAllowed, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
-
-function appUrl() {
-  return process.env.APP_URL || 'http://localhost:3000'
-}
+import { getAppUrl, getStringQuery, handleOptions, isOriginAllowed, jsonError, methodNotAllowed, setCors } from '../../_lib/http.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleOptions(req, res, ['GET', 'OPTIONS'])) return
@@ -44,7 +40,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
-    const base = appUrl()
+    const base = getAppUrl(req)
     const docUrl = `${base}/?fw_share=${encodeURIComponent(share.slug)}&token=${encodeURIComponent(token)}`
 
     setCors(req, res, ['GET', 'OPTIONS'])

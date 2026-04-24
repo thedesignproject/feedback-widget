@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireReviewer } from '../../../_lib/auth.js'
-import { handleOptions, jsonError, methodNotAllowed, setCors, getStringQuery } from '../../../_lib/http.js'
+import { getAppUrl, handleOptions, jsonError, methodNotAllowed, setCors, getStringQuery } from '../../../_lib/http.js'
 import { getProject, getRepoConfig, getShareById } from '../../../_lib/store.js'
 import { buildPrompt } from '../../../_lib/prompts.js'
 import { decryptToken } from '../../../_lib/tokens.js'
@@ -23,8 +23,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const repoConfig = await getRepoConfig(share.projectId)
     const token = decryptToken(share.accessTokenCiphertext)
+    const base = getAppUrl(req)
     const prompt = buildPrompt(target, {
-      appUrl: process.env.APP_URL || 'http://localhost:3000',
+      appUrl: base,
       slug: share.slug,
       token,
       pageUrl: share.scopePageUrl,
@@ -38,10 +39,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       shareId: share.id,
       target,
       prompt,
-      tokenUrl: `${process.env.APP_URL || 'http://localhost:3000'}/api/v1/agent/shares/${share.slug}/state?token=${encodeURIComponent(token)}`,
+      tokenUrl: `${base}/api/v1/agent/shares/${share.slug}/state?token=${encodeURIComponent(token)}`,
     })
   } catch (error) {
     return jsonError(req, res, 500, error instanceof Error ? error.message : 'Unexpected error')
   }
 }
-
