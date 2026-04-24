@@ -2,7 +2,6 @@ export interface Project {
   publicKey: string
   slug: string
   name: string
-  allowedOrigins: string[]
   createdAt: string
   updatedAt: string
 }

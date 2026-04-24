@@ -42,15 +42,6 @@ export function getStringQuery(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-export function isOriginAllowed(req: VercelRequest, project: { allowedOrigins?: string[] | null }) {
-  const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null
-  if (!origin) return true
-  const allowed = project.allowedOrigins || []
-  if (allowed.length === 0) return true
-  if (allowed.includes('*')) return true
-  return allowed.includes(origin)
-}
-
 export function getBearerToken(req: VercelRequest): string | undefined {
   const auth = req.headers.authorization
   if (typeof auth === 'string' && auth.startsWith('Bearer ')) {

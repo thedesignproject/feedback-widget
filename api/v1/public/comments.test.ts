@@ -99,12 +99,11 @@ describe('api/v1/public/comments', () => {
     expect(res.statusCode).toBe(404)
   })
 
-  it('creates a public comment when the origin is allowed', async () => {
+  it('creates a public comment', async () => {
     vi.mocked(getProject).mockResolvedValue({
       publicKey: 'demo-project',
       slug: 'demo-project',
       name: 'Demo',
-      allowedOrigins: ['https://example.com'],
       createdAt: '',
       updatedAt: '',
     })

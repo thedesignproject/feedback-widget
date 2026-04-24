@@ -53,30 +53,9 @@ function fromPagePercent(x: number, y: number) {
   }
 }
 
-// Anchor pin to its target element via stored selector. Falls back to percent/pixel
-// coords when the selector no longer resolves (DOM changed since capture).
-const STACK_OFFSET = 22 // px shift per additional pin sharing the same selector
-
-function pinPagePos(selector: string | undefined, x: number, y: number, stackIndex = 0): { pageX: number; pageY: number; anchored: boolean } {
-  if (selector) {
-    try {
-      const el = document.querySelector(selector) as HTMLElement | null
-      if (el) {
-        const rect = el.getBoundingClientRect()
-        if (rect.width > 0 && rect.height > 0) {
-          return {
-            pageX: rect.right + window.scrollX - stackIndex * STACK_OFFSET,
-            pageY: rect.top + window.scrollY,
-            anchored: true,
-          }
-        }
-      }
-    } catch {
-      // invalid selector — fall through
-    }
-  }
+function fromPagePercentFixed(x: number, y: number) {
   const { pageX, pageY } = fromPagePercent(x, y)
-  return { pageX, pageY, anchored: false }
+  return { fixedX: pageX - window.scrollX, fixedY: pageY - window.scrollY }
 }
 
 const WIDGET_ATTR = 'data-fw'
@@ -134,24 +113,36 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [pillPos, setPillPos] = useState({ x: window.innerWidth - 72, y: window.innerHeight - 200 })
   const dragging = useRef(false)
 
-  // Re-render on resize / page reflow so fromPagePercent recalculates pin positions.
-  // ResizeObserver on body catches lazy content / images / accordions that grow scrollHeight.
+  // Pins/popovers use position:fixed, so their viewport coords must be recomputed
+  // on scroll (and on resize / body reflow, which shift the page-percent mapping).
+  // RAF-coalesced and gated by needsPositionSyncRef so idle pages stay cheap.
   const [, forceUpdate] = useState(0)
+  const needsPositionSyncRef = useRef(false)
   useEffect(() => {
+    let raf = 0
+    const bump = () => {
+      if (!needsPositionSyncRef.current) return
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => forceUpdate(n => n + 1))
+    }
+
     function onResize() {
-      forceUpdate(n => n + 1)
+      bump()
       setPillPos(prev => ({
         x: Math.max(0, Math.min(window.innerWidth - 48, prev.x)),
         y: Math.max(0, Math.min(window.innerHeight - 160, prev.y)),
       }))
     }
     window.addEventListener('resize', onResize)
+    window.addEventListener('scroll', bump, { passive: true })
 
-    const ro = new ResizeObserver(() => forceUpdate(n => n + 1))
+    const ro = new ResizeObserver(bump)
     ro.observe(document.body)
 
     return () => {
+      cancelAnimationFrame(raf)
       window.removeEventListener('resize', onResize)
+      window.removeEventListener('scroll', bump)
       ro.disconnect()
     }
   }, [])
@@ -484,15 +475,14 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     }
   }
 
-  // --- Popover position (% coords → page-absolute; clamp to viewport at open, anchor to page so it scrolls with pin) ---
+  // Popover position — viewport-relative (fixed) so it doesn't extend scrollHeight.
+  // Re-renders on scroll via the bump listener, keeping it anchored to the pin.
   const popoverStyle = (): React.CSSProperties => {
     if (!target) return { display: 'none' }
     const pad = 16
     const popW = 300
     const popH = 180
-    const { pageX, pageY } = fromPagePercent(target.x, target.y)
-    const fixedX = pageX - window.scrollX
-    const fixedY = pageY - window.scrollY
+    const { fixedX, fixedY } = fromPagePercentFixed(target.x, target.y)
     let leftFixed = fixedX + pad
     let topFixed = fixedY + pad
     if (leftFixed + popW > window.innerWidth) leftFixed = fixedX - popW - pad
@@ -500,29 +490,26 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     if (leftFixed < pad) leftFixed = pad
     if (topFixed < pad) topFixed = pad
     return {
-      position: 'absolute',
-      left: leftFixed + window.scrollX,
-      top: topFixed + window.scrollY,
+      position: 'fixed',
+      left: leftFixed,
+      top: topFixed,
       zIndex: 2147483646,
     }
   }
 
-  // --- Pin popover position for viewing existing comments ---
   const pinPopoverStyle = (c: Comment): React.CSSProperties => {
     const pad = 16
     const popW = 280
-    const { pageX, pageY } = pinPagePos(c.selector, c.x, c.y, stackIndices.get(c.id) ?? 0)
-    const fixedX = pageX - window.scrollX
-    const fixedY = pageY - window.scrollY
+    const { fixedX, fixedY } = fromPagePercentFixed(c.x, c.y)
     let leftFixed = fixedX + pad
     let topFixed = fixedY - 20
     if (leftFixed + popW > window.innerWidth) leftFixed = fixedX - popW - pad
     if (leftFixed < pad) leftFixed = pad
     if (topFixed < pad) topFixed = fixedY + 40
     return {
-      position: 'absolute',
-      left: leftFixed + window.scrollX,
-      top: topFixed + window.scrollY,
+      position: 'fixed',
+      left: leftFixed,
+      top: topFixed,
       zIndex: 2147483646,
     }
   }
@@ -542,17 +529,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   }), [visibleComments])
   const commentCount = visibleComments.length
 
-  // Per-comment stack index: pins sharing a selector cascade right so they don't overlap.
-  const stackIndices = useMemo(() => {
-    const m = new Map<string, number>()
-    const counts = new Map<string, number>()
-    for (const c of visibleComments) {
-      const n = counts.get(c.selector) ?? 0
-      m.set(c.id, n)
-      counts.set(c.selector, n + 1)
-    }
-    return m
-  }, [visibleComments])
+  needsPositionSyncRef.current = commentCount > 0 || mode !== 'idle' || !!target
 
   return (
     <div {...{ [WIDGET_ATTR]: '' }}>
@@ -805,14 +782,14 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
       {/* New comment pin at clicked position */}
       {mode === 'commenting' && target && (() => {
-        const { pageX, pageY } = fromPagePercent(target.x, target.y)
+        const { fixedX, fixedY } = fromPagePercentFixed(target.x, target.y)
         return (
         <div
           {...{ [WIDGET_ATTR]: '' }}
           style={{
-            position: 'absolute',
-            left: pageX - 16,
-            top: pageY - 40,
+            position: 'fixed',
+            left: fixedX - 16,
+            top: fixedY - 40,
             zIndex: 2147483646,
             pointerEvents: 'none',
           }}
@@ -829,7 +806,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
       {/* Persisted comment pins */}
       {visibleComments.map((c, i) => {
-        const { pageX: pinPageX, pageY: pinPageY } = pinPagePos(c.selector, c.x, c.y, stackIndices.get(c.id) ?? 0)
+        const { fixedX: pinFixedX, fixedY: pinFixedY } = fromPagePercentFixed(c.x, c.y)
         const pinNumber = visibleComments.length - i
         const isSelected = selectedPin === c.id
         const isHovered = hoveredPin === c.id && !isSelected
@@ -848,9 +825,9 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               onMouseEnter={() => setHoveredPin(c.id)}
               onMouseLeave={() => setHoveredPin(null)}
               style={{
-                position: 'absolute',
-                left: pinPageX - 16,
-                top: pinPageY - 40,
+                position: 'fixed',
+                left: pinFixedX - 16,
+                top: pinFixedY - 40,
                 zIndex: isSelected ? 2147483646 : isHovered ? 2147483642 : 2147483640,
                 cursor: 'pointer',
                 transition: 'transform 0.15s',
@@ -869,9 +846,9 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             {isHovered && (
               <div
                 style={{
-                  position: 'absolute',
-                  left: pinPageX - 16,
-                  top: pinPageY - 78,
+                  position: 'fixed',
+                  left: pinFixedX - 16,
+                  top: pinFixedY - 78,
                   zIndex: 2147483643,
                   pointerEvents: 'none',
                   animation: 'fw-tooltip-in 0.15s ease both',
