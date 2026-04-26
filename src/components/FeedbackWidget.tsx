@@ -60,6 +60,44 @@ function fromPagePercentFixed(x: number, y: number) {
 
 const WIDGET_ATTR = 'data-fw'
 
+const PIN_GRADIENT = 'radial-gradient(circle at 50% 40%, #ffffff 0%, #ffffff 6%, #c4d6ff 25%, #5b87e8 65%, #2563eb 100%)'
+
+const NOISE_OVERLAY_BG = "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.55'/></svg>\")"
+
+function PinMarker({ outline = false }: { outline?: boolean }) {
+  return (
+    <div style={{
+      width: 32, height: 32,
+      borderRadius: '50% 50% 50% 0',
+      background: PIN_GRADIENT,
+      outline: outline ? '2px solid #fff' : 'none',
+      outlineOffset: outline ? 1 : 0,
+      position: 'relative',
+      overflow: 'hidden',
+    }}>
+      <div style={{
+        position: 'absolute',
+        left: '50%', top: '40%',
+        width: 22, height: 22,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0) 65%)',
+        animation: 'fw-pin-inner-pulse 1.8s ease-in-out infinite',
+        pointerEvents: 'none',
+        mixBlendMode: 'screen',
+      }} />
+      <div style={{
+        position: 'absolute',
+        inset: 0,
+        borderRadius: 'inherit',
+        backgroundImage: NOISE_OVERLAY_BG,
+        mixBlendMode: 'overlay',
+        opacity: 0.5,
+        pointerEvents: 'none',
+      }} />
+    </div>
+  )
+}
+
 const AVATAR_COLORS = ['#8b5cf6', '#f97316', '#3b82f6', '#ec4899', '#14b8a6', '#f43f5e', '#6366f1', '#84cc16']
 function avatarColor(id: string) {
   let hash = 0
@@ -517,7 +555,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const cutoff = new Date('2026-04-19T00:00:00Z')
   const visibleComments = useMemo(() => comments.filter((c) => {
     if (new Date(c.createdAt) < cutoff) return false
-    if (c.reviewStatus === 'accepted') return false
     const commentUrl = c.pageUrl.split('?')[0].split('#')[0]
     return commentUrl === currentUrl
   }), [comments, currentUrl])
@@ -788,18 +825,15 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           {...{ [WIDGET_ATTR]: '' }}
           style={{
             position: 'fixed',
-            left: fixedX - 16,
-            top: fixedY - 40,
+            left: fixedX,
+            top: fixedY - 44,
             zIndex: 2147483646,
             pointerEvents: 'none',
+            animation: 'fw-pin-glow-pulse 2.4s ease-in-out infinite',
+            transformOrigin: 'bottom left',
           }}
         >
-          <svg width="32" height="40" viewBox="0 0 32 40" fill="none">
-            <path d="M16 38c0 0-14-12.5-14-22a14 14 0 1 1 28 0c0 9.5-14 22-14 22z" fill="#F5F0DC" stroke="#222" strokeWidth="2" />
-            <text x="16" y="19.5" textAnchor="middle" fill="#111" fontSize="11" fontWeight="700" fontFamily="-apple-system, BlinkMacSystemFont, sans-serif">
-              U
-            </text>
-          </svg>
+          <PinMarker />
         </div>
         )
       })()}
@@ -810,10 +844,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         const pinNumber = visibleComments.length - i
         const isSelected = selectedPin === c.id
         const isHovered = hoveredPin === c.id && !isSelected
-        const statusDotColor = c.reviewStatus === 'accepted' ? '#22c55e' : c.reviewStatus === 'rejected' ? '#ef4444' : '#111'
-        const truncated = c.body.length > 60 ? c.body.slice(0, 60) + '\u2026' : c.body
-        const pinColor = isSelected ? '#3b82f6' : '#f5f5f5'
-        const initial = (c.body[0] || 'U').toUpperCase()
+        const isResolved = c.reviewStatus === 'accepted' || c.reviewStatus === 'rejected'
         return (
           <div key={c.id} {...{ [WIDGET_ATTR]: '' }}>
             {/* Pin marker */}
@@ -826,61 +857,63 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               onMouseLeave={() => setHoveredPin(null)}
               style={{
                 position: 'fixed',
-                left: pinFixedX - 16,
-                top: pinFixedY - 40,
+                left: pinFixedX,
+                top: pinFixedY - 44,
                 zIndex: isSelected ? 2147483646 : isHovered ? 2147483642 : 2147483640,
                 cursor: 'pointer',
-                transition: 'transform 0.15s',
+                transition: 'transform 0.15s, opacity 0.2s',
                 transform: isSelected || isHovered ? 'scale(1.15)' : 'scale(1)',
+                transformOrigin: 'bottom left',
+                opacity: isResolved && !isSelected && !isHovered ? 0.4 : 1,
+                animation: 'fw-pin-glow-pulse 2.4s ease-in-out infinite',
               }}
             >
-              <svg width="32" height="40" viewBox="0 0 32 40" fill="none">
-                <path d="M16 38c0 0-14-12.5-14-22a14 14 0 1 1 28 0c0 9.5-14 22-14 22z" fill={isSelected ? '#3b82f6' : '#F5F0DC'} stroke={isSelected ? '#2563eb' : '#222'} strokeWidth="2" />
-                <text x="16" y="19.5" textAnchor="middle" fill={isSelected ? '#fff' : '#111'} fontSize="11" fontWeight="700" fontFamily="-apple-system, BlinkMacSystemFont, sans-serif">
-                  {initial}
-                </text>
-              </svg>
+              <PinMarker outline={isSelected} />
             </div>
 
-            {/* Hover tooltip */}
+            {/* Hover tooltip — same material as pin, expanded card */}
             {isHovered && (
               <div
                 style={{
                   position: 'fixed',
-                  left: pinFixedX - 16,
-                  top: pinFixedY - 78,
+                  left: pinFixedX,
+                  top: pinFixedY - 12,
                   zIndex: 2147483643,
                   pointerEvents: 'none',
-                  animation: 'fw-tooltip-in 0.15s ease both',
+                  transform: 'translateY(-100%)',
                 }}
               >
                 <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  background: '#1e1e1e',
-                  borderRadius: 8,
-                  padding: '6px 10px',
-                  maxWidth: 240,
+                  position: 'relative',
+                  width: 280,
+                  background: 'rgba(255, 255, 255, 0.65)',
+                  backdropFilter: 'blur(20px) saturate(180%)',
+                  WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+                  borderRadius: '14px 14px 14px 0',
+                  padding: 14,
+                  boxShadow: '0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.6)',
+                  border: '1px solid rgba(255, 255, 255, 0.5)',
                   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+                  animation: 'fw-tooltip-liquid 0.5s cubic-bezier(0.16, 1, 0.3, 1) both',
+                  transformOrigin: '0% 100%',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
                 }}>
-                  <span style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    background: statusDotColor,
+                  <div style={{
+                    width: 28, height: 28, borderRadius: '50%',
+                    background: PIN_GRADIENT,
                     flexShrink: 0,
                   }} />
-                  <span style={{
-                    fontSize: 12,
-                    color: '#fff',
-                    lineHeight: 1.3,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}>
-                    {truncated}
-                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#111' }}>User</span>
+                      <span style={{ fontSize: 12, color: '#888' }}>{timeAgo(c.createdAt)}</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: '#333', lineHeight: 1.4, wordBreak: 'break-word' }}>
+                      {c.body}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1125,7 +1158,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                       <>
                         <div
                           onClick={(e) => { e.stopPropagation(); setEditingId(c.id); setEditText(c.body) }}
-                          style={{ fontSize: 13, lineHeight: 1.4, color: '#ccc', cursor: 'text' }}
+                          style={{ fontSize: 13, lineHeight: 1.4, color: isResolved ? '#555' : '#ccc', cursor: 'text' }}
                         >
                           {c.body}
                         </div>
@@ -1134,7 +1167,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                             src={c.imageUrl}
                             alt=""
                             onClick={(e) => { e.stopPropagation(); window.open(c.imageUrl!, '_blank') }}
-                            style={{ marginTop: 8, maxWidth: '100%', borderRadius: 6, border: '1px solid #2a2a2a', cursor: 'zoom-in', display: 'block' }}
+                            style={{ marginTop: 8, maxWidth: '100%', borderRadius: 6, border: '1px solid #2a2a2a', cursor: 'zoom-in', display: 'block', filter: isResolved ? 'grayscale(0.7) brightness(0.5)' : 'none' }}
                           />
                         )}
                       </>
@@ -1431,6 +1464,29 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           0% { transform: translateY(-20px); opacity: 0; }
           60% { transform: translateY(4px); opacity: 1; }
           100% { transform: translateY(0); opacity: 1; }
+        }
+        @keyframes fw-pin-glow-pulse {
+          0%, 100% {
+            filter:
+              drop-shadow(0 0 8px rgba(91, 135, 232, 0.5))
+              drop-shadow(0 0 16px rgba(91, 135, 232, 0.25))
+              drop-shadow(0 2px 4px rgba(0, 0, 0, 0.18));
+          }
+          50% {
+            filter:
+              drop-shadow(0 0 12px rgba(91, 135, 232, 0.65))
+              drop-shadow(0 0 26px rgba(91, 135, 232, 0.35))
+              drop-shadow(0 2px 4px rgba(0, 0, 0, 0.18));
+          }
+        }
+        @keyframes fw-pin-inner-pulse {
+          0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) scale(0.8); }
+          50% { opacity: 1; transform: translate(-50%, -50%) scale(1.2); }
+        }
+        @keyframes fw-tooltip-liquid {
+          0% { opacity: 0; transform: scale(0.08); filter: blur(10px); }
+          35% { opacity: 1; }
+          100% { opacity: 1; transform: scale(1); filter: blur(0); }
         }
         .fw-sidebar-card:hover .fw-card-actions {
           display: flex !important;
