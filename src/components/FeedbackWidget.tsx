@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MessageCircle, LogOut, Menu, X, Bot } from 'lucide-react'
+import { MessageCircle, Menu, X, Bot } from 'lucide-react'
 import { VtooltipRoot, VtooltipItem, VtooltipTrigger, VtooltipContent } from './VTooltipMenu'
 import { getSelector } from '../lib/getSelector'
 import { useScreenshotCapture } from '../lib/screenshotCapture'
 import { AgentBridgeModal } from './AgentBridgeModal'
+import { readAuthorMap, readAuthorName, rememberCommentAuthor, writeAuthorName } from '../lib/authorStorage'
 
 interface FeedbackWidgetProps {
   projectId: string
@@ -31,7 +32,9 @@ interface Comment {
   reviewStatus: ReviewStatus
   imageUrl?: string | null
   createdAt: string
+  authorName?: string
 }
+
 
 function toPagePercent(pageX: number, pageY: number) {
   const { scrollWidth, scrollHeight } = document.documentElement
@@ -130,10 +133,15 @@ async function fetchProjectComments(apiBase: string, projectId: string): Promise
     const data: unknown = await res.json()
     if (!Array.isArray(data)) return []
 
-    return data.map((comment) => ({
-      ...(comment as Comment),
-      reviewStatus: normalizeReviewStatus((comment as { reviewStatus?: unknown }).reviewStatus),
-    }))
+    const authorMap = readAuthorMap()
+    return data.map((comment) => {
+      const c = comment as Comment
+      return {
+        ...c,
+        reviewStatus: normalizeReviewStatus((comment as { reviewStatus?: unknown }).reviewStatus),
+        authorName: c.authorName ?? authorMap[c.id],
+      }
+    })
   } catch {
     // Endpoint not ready yet; keep the widget usable with an empty sidebar.
     return []
@@ -146,6 +154,26 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [comment, setComment] = useState('')
   const [sending, setSending] = useState(false)
   const [hovered, setHovered] = useState<Element | null>(null)
+
+  const [authorName, setAuthorNameState] = useState<string | null>(null)
+  const authorNameRef = useRef<string | null>(null)
+  const [showNameModal, setShowNameModal] = useState(false)
+  const [nameInput, setNameInput] = useState('')
+  const [popoverMenuOpen, setPopoverMenuOpen] = useState(false)
+  // selectedPin is declared below; reset menu when it changes
+
+  useEffect(() => {
+    const stored = readAuthorName()
+    setAuthorNameState(stored)
+    authorNameRef.current = stored
+  }, [])
+  function saveAuthorName(name: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    writeAuthorName(trimmed)
+    setAuthorNameState(trimmed)
+    authorNameRef.current = trimmed
+  }
 
   // Draggable pill state
   const [pillPos, setPillPos] = useState({ x: window.innerWidth - 72, y: window.innerHeight - 200 })
@@ -191,6 +219,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   // Pin state
   const [selectedPin, setSelectedPin] = useState<string | null>(null)
   const [hoveredPin, setHoveredPin] = useState<string | null>(null)
+  useEffect(() => { setPopoverMenuOpen(false) }, [selectedPin])
 
   // Inline edit state
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -302,9 +331,15 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         y: pct.y,
         url: window.location.href,
       })
-      setMode('commenting')
 
       captureImage(el)
+
+      if (!authorNameRef.current) {
+        setShowNameModal(true)
+        return
+      }
+
+      setMode('commenting')
     }
 
     window.addEventListener('click', onClick, true)
@@ -368,6 +403,11 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         reviewStatus: 'open',
         imageUrl: data.imageUrl ?? null,
         createdAt: data.createdAt ?? new Date().toISOString(),
+        authorName: authorNameRef.current ?? undefined,
+      }
+
+      if (newComment.authorName) {
+        rememberCommentAuthor(newComment.id, newComment.authorName)
       }
 
       setComments((prev) => [newComment, ...prev])
@@ -428,7 +468,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [mode, handleSend, sidebarOpen])
+  }, [mode, handleSend, sidebarOpen, selectedPin])
 
   function exitFeedbackMode() {
     setMode('idle')
@@ -681,8 +721,10 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleSend() }
-                  if (e.key === 'Enter' && !e.shiftKey && comment.length === 0) { e.preventDefault() }
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    if (comment.trim()) handleSend()
+                  }
                 }}
                 placeholder="Add a comment"
                 rows={comment.length > 0 || !!image ? 3 : 1}
@@ -907,7 +949,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                   }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#111' }}>User</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#111' }}>{c.authorName ?? 'User'}</span>
                       <span style={{ fontSize: 12, color: '#888' }}>{timeAgo(c.createdAt)}</span>
                     </div>
                     <div style={{ fontSize: 13, color: '#333', lineHeight: 1.4, wordBreak: 'break-word' }}>
@@ -927,7 +969,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                 : c.reviewStatus === 'rejected'
                   ? { bg: '#fef2f2', color: '#dc2626', label: 'Rejected' }
                   : { bg: '#fffbeb', color: '#d97706', label: 'Pending' }
-              const selectorShort = c.selector.split('>').pop()?.trim() || c.selector
               return (
                 <>
                   <div
@@ -959,24 +1000,143 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                       </div>
                       {/* Name + meta */}
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: '#111', marginBottom: 2 }}>User</div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#111', marginBottom: 2 }}>{c.authorName ?? 'User'}</div>
                         <div style={{ fontSize: 11, color: '#aaa' }}>
                           #{pinNumber} &middot; {timeAgo(c.createdAt)}
                         </div>
                       </div>
-                      {/* Status badge */}
-                      <span style={{
-                        fontSize: 10, fontWeight: 600, padding: '3px 8px', borderRadius: 9999,
-                        background: stBadge.bg, color: stBadge.color, flexShrink: 0, marginTop: 2,
-                      }}>
-                        {stBadge.label}
-                      </span>
+                      {/* Action cluster: resolve + menu + status dot */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, position: 'relative' }}>
+                        {!isResolved && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              updateStatus(c.id, 'accepted')
+                              setSelectedPin(null)
+                            }}
+                            title="Mark as resolved"
+                            style={{
+                              width: 22, height: 22, borderRadius: '50%',
+                              border: '1.5px solid #d4d4d4',
+                              background: 'transparent', cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              color: '#888', padding: 0,
+                              transition: 'all 0.15s',
+                            }}
+                            onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#22c55e'; e.currentTarget.style.color = '#22c55e' }}
+                            onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#d4d4d4'; e.currentTarget.style.color = '#888' }}
+                          >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPopoverMenuOpen((v) => !v) }}
+                          title="More"
+                          style={{
+                            width: 24, height: 24, borderRadius: 4, border: 'none',
+                            background: popoverMenuOpen ? '#f0f0f0' : 'transparent',
+                            cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: '#888', padding: 0,
+                            transition: 'background 0.15s',
+                          }}
+                          onMouseEnter={(e) => { if (!popoverMenuOpen) e.currentTarget.style.background = '#f5f5f5' }}
+                          onMouseLeave={(e) => { if (!popoverMenuOpen) e.currentTarget.style.background = 'transparent' }}
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="12" cy="19" r="1.5" /></svg>
+                        </button>
+                        {!isResolved && (
+                          <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6', flexShrink: 0 }} />
+                        )}
+
+                        {popoverMenuOpen && (
+                          <>
+                            <div
+                              onClick={(e) => { e.stopPropagation(); setPopoverMenuOpen(false) }}
+                              style={{ position: 'fixed', inset: 0, zIndex: 99998 }}
+                            />
+                            <div
+                              onClick={(e) => e.stopPropagation()}
+                              style={{
+                                position: 'absolute', top: 30, right: 0, zIndex: 99999,
+                                background: '#fff', border: '1px solid #e5e5e5', borderRadius: 8,
+                                padding: '4px 0', minWidth: 180,
+                                boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                                animation: 'fw-tooltip-in 0.1s ease both',
+                              }}
+                            >
+                              <button
+                                onClick={() => { updateStatus(c.id, isResolved ? 'open' : 'accepted'); setPopoverMenuOpen(false); setSelectedPin(null) }}
+                                style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#333', fontSize: 13, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'inherit' }}
+                                onMouseEnter={(e) => (e.currentTarget.style.background = '#f5f5f5')}
+                                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                                {isResolved ? 'Reopen' : 'Mark as resolved'}
+                              </button>
+                              <button
+                                onClick={() => { setEditingId(c.id); setEditText(c.body); setPopoverMenuOpen(false) }}
+                                style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#333', fontSize: 13, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'inherit' }}
+                                onMouseEnter={(e) => (e.currentTarget.style.background = '#f5f5f5')}
+                                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                                Edit
+                              </button>
+                              <div style={{ height: 1, background: '#eee', margin: '4px 0' }} />
+                              <button
+                                onClick={() => { deleteComment(c.id); setPopoverMenuOpen(false); setSelectedPin(null) }}
+                                style={{ width: '100%', padding: '8px 14px', background: 'none', border: 'none', color: '#ef4444', fontSize: 13, textAlign: 'left', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'inherit' }}
+                                onMouseEnter={(e) => (e.currentTarget.style.background = '#fef2f2')}
+                                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                              >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" /></svg>
+                                Delete
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
 
-                    {/* Comment text */}
-                    <div style={{ fontSize: 14, lineHeight: 1.6, color: '#333', marginBottom: c.imageUrl ? 10 : 14 }}>
-                      {c.body}
-                    </div>
+                    {/* Comment text — editable when editingId matches */}
+                    {editingId === c.id ? (
+                      <div style={{ marginBottom: c.imageUrl ? 10 : 14 }}>
+                        <textarea
+                          autoFocus
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(c.id) }
+                            if (e.key === 'Escape') { setEditingId(null) }
+                          }}
+                          rows={3}
+                          style={{
+                            width: '100%', boxSizing: 'border-box',
+                            fontSize: 14, lineHeight: 1.5, color: '#111',
+                            border: '1px solid #d4d4d4', borderRadius: 8,
+                            padding: '8px 10px', fontFamily: 'inherit',
+                            outline: 'none', resize: 'vertical', background: '#fff',
+                          }}
+                          onFocus={(e) => (e.target.style.borderColor = '#3b82f6')}
+                          onBlur={(e) => (e.target.style.borderColor = '#d4d4d4')}
+                        />
+                        <div style={{ display: 'flex', gap: 8, marginTop: 6, justifyContent: 'flex-end' }}>
+                          <button
+                            onClick={() => setEditingId(null)}
+                            style={{ fontSize: 12, color: '#666', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 10px', fontFamily: 'inherit' }}
+                          >Cancel</button>
+                          <button
+                            onClick={() => saveEdit(c.id)}
+                            style={{ fontSize: 12, color: '#fff', background: '#3b82f6', fontWeight: 600, border: 'none', borderRadius: 6, cursor: 'pointer', padding: '4px 12px', fontFamily: 'inherit' }}
+                          >Save</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 14, lineHeight: 1.6, color: '#333', marginBottom: c.imageUrl ? 10 : 14 }}>
+                        {c.body}
+                      </div>
+                    )}
 
                     {/* Screenshot */}
                     {c.imageUrl && (
@@ -988,27 +1148,6 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                       />
                     )}
 
-                    {/* Element chip */}
-                    <div style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 6,
-                      fontSize: 11, color: '#999', background: '#f5f5f5',
-                      padding: '4px 10px', borderRadius: 6,
-                      maxWidth: '100%', overflow: 'hidden',
-                    }}>
-                      {/* Grid icon */}
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#bbb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="3" y="3" width="7" height="7" />
-                        <rect x="14" y="3" width="7" height="7" />
-                        <rect x="3" y="14" width="7" height="7" />
-                        <rect x="14" y="14" width="7" height="7" />
-                      </svg>
-                      <span style={{
-                        fontFamily: '"SF Mono", "Fira Code", Menlo, monospace',
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                      }}>
-                        {selectorShort}
-                      </span>
-                    </div>
                   </div>
                 </>
               )
@@ -1123,7 +1262,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
                     {/* Author + time */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#ddd' }}>User</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#ddd' }}>{c.authorName ?? 'User'}</span>
                       <span style={{ fontSize: 11, color: '#555' }}>{timeAgo(c.createdAt)}</span>
                     </div>
 
@@ -1343,29 +1482,8 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               </VtooltipContent>
             </VtooltipItem>
 
-            {/* Share */}
-            <VtooltipItem index={1}>
-              <VtooltipTrigger
-                onClick={(e) => {
-                  if (didDrag.current) { e.preventDefault(); return }
-                  enterFeedbackMode()
-                }}
-              >
-                <div className="fw-pill-icon" style={{ position: 'relative', display: 'flex', width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 9999 }}>
-                  <LogOut style={{ width: 18, height: 18, transform: 'rotate(-90deg)' }} />
-                </div>
-                <span style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0 }}>Share</span>
-              </VtooltipTrigger>
-              <VtooltipContent>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap', padding: '0 8px', fontSize: 14, fontWeight: 500, lineHeight: 1.2, letterSpacing: '-0.01em', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
-                  Share
-                  <span style={{ display: 'inline-flex', width: 20, height: 20, alignItems: 'center', justifyContent: 'center', borderRadius: 3, border: '1px solid rgba(255,255,255,0.3)', padding: 2, fontSize: 12, color: '#fff' }}>S</span>
-                </div>
-              </VtooltipContent>
-            </VtooltipItem>
-
             {/* Agent bridge */}
-            <VtooltipItem index={2}>
+            <VtooltipItem index={1}>
               <VtooltipTrigger
                 onClick={(e) => {
                   if (didDrag.current) { e.preventDefault(); return }
@@ -1385,7 +1503,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             </VtooltipItem>
 
             {/* Menu */}
-            <VtooltipItem index={3}>
+            <VtooltipItem index={2}>
               <VtooltipTrigger
                 onClick={(e) => {
                   if (didDrag.current) { e.preventDefault(); return }
@@ -1506,7 +1624,97 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           71% { outline-color: #3b82f6; background-color: rgba(59, 130, 246, 0.15); }
           100% { outline-color: transparent; background-color: transparent; }
         }
+        @keyframes fw-modal-overlay-in {
+          0% { opacity: 0; }
+          100% { opacity: 1; }
+        }
+        @keyframes fw-modal-card-in {
+          0% { opacity: 0; transform: scale(0.94) translateY(8px); }
+          100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
       `}</style>
+
+      {showNameModal && (
+        <div
+          {...{ [WIDGET_ATTR]: '' }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 2147483647,
+            background: 'rgba(10, 10, 15, 0.55)',
+            backdropFilter: 'blur(6px)',
+            WebkitBackdropFilter: 'blur(6px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            animation: 'fw-modal-overlay-in 0.18s ease both',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (!nameInput.trim()) return
+              saveAuthorName(nameInput)
+              setShowNameModal(false)
+              setNameInput('')
+              setMode('commenting')
+            }}
+            style={{
+              width: 360, maxWidth: 'calc(100vw - 32px)',
+              background: '#fff', borderRadius: 16, padding: 24,
+              boxShadow: '0 24px 64px rgba(0, 0, 0, 0.25), 0 4px 12px rgba(0, 0, 0, 0.12)',
+              animation: 'fw-modal-card-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both',
+              display: 'flex', flexDirection: 'column', gap: 16,
+            }}
+          >
+            <div style={{
+              width: 44, height: 44, borderRadius: '50% 50% 50% 0',
+              background: PIN_GRADIENT,
+              alignSelf: 'flex-start',
+            }} />
+            <div>
+              <h2 style={{ fontSize: 18, fontWeight: 700, color: '#111', margin: 0, marginBottom: 6 }}>
+                What's your name?
+              </h2>
+              <p style={{ fontSize: 13, color: '#666', margin: 0, lineHeight: 1.4 }}>
+                Your name will appear on the comments you leave.
+              </p>
+            </div>
+            <input
+              autoFocus
+              type="text"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              placeholder="e.g. Tomas"
+              required
+              maxLength={40}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                padding: '10px 12px', fontSize: 14, color: '#111',
+                background: '#fafafa',
+                border: '1px solid #e5e5e5', borderRadius: 8,
+                outline: 'none', fontFamily: 'inherit',
+                transition: 'border-color 0.15s, background 0.15s',
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = '#2563eb'; e.currentTarget.style.background = '#fff' }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = '#e5e5e5'; e.currentTarget.style.background = '#fafafa' }}
+            />
+            <button
+              type="submit"
+              disabled={!nameInput.trim()}
+              style={{
+                width: '100%', padding: '11px 0', fontSize: 14, fontWeight: 600,
+                color: '#fff',
+                background: nameInput.trim() ? '#111' : '#ccc',
+                border: 'none', borderRadius: 8,
+                cursor: nameInput.trim() ? 'pointer' : 'not-allowed',
+                transition: 'background 0.15s',
+                fontFamily: 'inherit',
+              }}
+            >
+              Continue
+            </button>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
