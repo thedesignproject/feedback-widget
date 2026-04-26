@@ -2,6 +2,7 @@
   "name": "@thedesignproject/feedback-widget",
   "version": "0.3.9",
   "description": "Visual feedback widget for React apps",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/thedesignproject/feedback-widget.git"
