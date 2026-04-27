@@ -606,7 +606,9 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   }), [visibleComments])
   const commentCount = visibleComments.length
 
-  needsPositionSyncRef.current = commentCount > 0 || mode !== 'idle' || !!target
+  // Only sync on scroll when a viewport-anchored popover is open or commenting.
+  // Persisted pins/tooltip are absolute (page-anchored), so scroll moves them natively.
+  needsPositionSyncRef.current = selectedPin !== null || mode !== 'idle' || !!target
 
   return (
     <div {...{ [WIDGET_ATTR]: '' }}>
@@ -861,14 +863,14 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
       {/* New comment pin at clicked position */}
       {mode === 'commenting' && target && (() => {
-        const { fixedX, fixedY } = fromPagePercentFixed(target.x, target.y)
+        const { pageX, pageY } = fromPagePercent(target.x, target.y)
         return (
         <div
           {...{ [WIDGET_ATTR]: '' }}
           style={{
-            position: 'fixed',
-            left: fixedX,
-            top: fixedY - 44,
+            position: 'absolute',
+            left: pageX,
+            top: pageY - 44,
             zIndex: 2147483646,
             pointerEvents: 'none',
             animation: 'fw-pin-glow-pulse 2.4s ease-in-out infinite',
@@ -882,7 +884,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
 
       {/* Persisted comment pins */}
       {visibleComments.map((c, i) => {
-        const { fixedX: pinFixedX, fixedY: pinFixedY } = fromPagePercentFixed(c.x, c.y)
+        const { pageX: pinPageX, pageY: pinPageY } = fromPagePercent(c.x, c.y)
         const pinNumber = visibleComments.length - i
         const isSelected = selectedPin === c.id
         const isHovered = hoveredPin === c.id && !isSelected
@@ -898,9 +900,9 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               onMouseEnter={() => setHoveredPin(c.id)}
               onMouseLeave={() => setHoveredPin(null)}
               style={{
-                position: 'fixed',
-                left: pinFixedX,
-                top: pinFixedY - 44,
+                position: 'absolute',
+                left: pinPageX,
+                top: pinPageY - 44,
                 zIndex: isSelected ? 2147483646 : isHovered ? 2147483642 : 2147483640,
                 cursor: 'pointer',
                 transition: 'transform 0.15s, opacity 0.2s',
@@ -917,9 +919,9 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             {isHovered && (
               <div
                 style={{
-                  position: 'fixed',
-                  left: pinFixedX,
-                  top: pinFixedY - 12,
+                  position: 'absolute',
+                  left: pinPageX,
+                  top: pinPageY - 12,
                   zIndex: 2147483643,
                   pointerEvents: 'none',
                   transform: 'translateY(-100%)',
@@ -1161,7 +1163,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         <div
           {...{ [WIDGET_ATTR]: '' }}
           onClick={() => setSidebarOpen(false)}
-          style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+          style={{ position: 'fixed', inset: 0, zIndex: 2147483646 }}
         />
       )}
 
@@ -1174,7 +1176,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           right: 0,
           bottom: 0,
           width: 340,
-          zIndex: 9999,
+          zIndex: 2147483647,
           background: '#1a1a1a',
           transform: sidebarOpen ? 'translateX(0)' : 'translateX(100%)',
           transition: 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
