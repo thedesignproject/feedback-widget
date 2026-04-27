@@ -59,6 +59,20 @@ async function enterCommentingMode() {
     targetNode.dispatchEvent(evt)
   })
 
+  // First click in a fresh session opens the name modal — fill it before
+  // we can reach the comment textarea.
+  const nameInput = await waitFor(() => {
+    const el = document.querySelector<HTMLInputElement>('input[placeholder^="e.g."]')
+    if (!el) throw new Error('name input not mounted yet')
+    return el
+  })
+  await act(async () => {
+    fireEvent.change(nameInput, { target: { value: 'Test User' } })
+  })
+  await act(async () => {
+    fireEvent.submit(nameInput.closest('form')!)
+  })
+
   const textarea = await waitFor(() => {
     const el = document.querySelector<HTMLTextAreaElement>('textarea')
     if (!el) throw new Error('textarea not mounted yet')
@@ -79,6 +93,7 @@ async function enterCommentingMode() {
 describe('<FeedbackWidget />', () => {
   beforeEach(() => {
     vi.stubGlobal('crypto', { randomUUID: () => 'test-uuid' })
+    try { localStorage.clear() } catch {}
   })
 
   afterEach(() => {
