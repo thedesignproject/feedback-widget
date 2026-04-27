@@ -4,7 +4,6 @@ import { VtooltipRoot, VtooltipItem, VtooltipTrigger, VtooltipContent } from './
 import { getSelector } from '../lib/getSelector'
 import { useScreenshotCapture } from '../lib/screenshotCapture'
 import { AgentBridgeModal } from './AgentBridgeModal'
-import { readAuthorMap, readAuthorName, rememberCommentAuthor, writeAuthorName } from '../lib/authorStorage'
 
 interface FeedbackWidgetProps {
   projectId: string
@@ -108,6 +107,16 @@ function avatarColor(id: string) {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length]
 }
 
+const AUTHOR_NAME_KEY = 'fw-author-name'
+
+function getInitials(name: string | null | undefined): string | null {
+  if (!name) return null
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return null
+  if (parts.length === 1) return parts[0]!.slice(0, 1).toUpperCase()
+  return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase()
+}
+
 function timeAgo(date: string): string {
   const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000)
   if (seconds < 5) return 'just now'
@@ -133,13 +142,11 @@ async function fetchProjectComments(apiBase: string, projectId: string): Promise
     const data: unknown = await res.json()
     if (!Array.isArray(data)) return []
 
-    const authorMap = readAuthorMap()
     return data.map((comment) => {
       const c = comment as Comment
       return {
         ...c,
         reviewStatus: normalizeReviewStatus((comment as { reviewStatus?: unknown }).reviewStatus),
-        authorName: c.authorName ?? authorMap[c.id],
       }
     })
   } catch {
@@ -155,7 +162,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   const [sending, setSending] = useState(false)
   const [hovered, setHovered] = useState<Element | null>(null)
 
-  const [authorName, setAuthorNameState] = useState<string | null>(null)
+  const [authorName, setAuthorName] = useState<string | null>(null)
   const authorNameRef = useRef<string | null>(null)
   const [showNameModal, setShowNameModal] = useState(false)
   const [nameInput, setNameInput] = useState('')
@@ -163,16 +170,26 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
   // selectedPin is declared below; reset menu when it changes
 
   useEffect(() => {
-    const stored = readAuthorName()
-    setAuthorNameState(stored)
-    authorNameRef.current = stored
+    try {
+      const stored = localStorage.getItem(AUTHOR_NAME_KEY)
+      if (stored) {
+        authorNameRef.current = stored
+        setAuthorName(stored)
+      }
+    } catch {}
   }, [])
+
   function saveAuthorName(name: string) {
     const trimmed = name.trim()
     if (!trimmed) return
-    writeAuthorName(trimmed)
-    setAuthorNameState(trimmed)
     authorNameRef.current = trimmed
+    setAuthorName(trimmed)
+    try { localStorage.setItem(AUTHOR_NAME_KEY, trimmed) } catch {}
+  }
+
+  function openNameEditor() {
+    setNameInput(authorNameRef.current ?? '')
+    setShowNameModal(true)
   }
 
   // Draggable pill state
@@ -373,6 +390,10 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         body: commentText,
       }
 
+      if (authorNameRef.current) {
+        payload.authorName = authorNameRef.current
+      }
+
       const encoded = await encodeImage()
       if (encoded) {
         payload.imageBase64 = encoded.base64
@@ -403,11 +424,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
         reviewStatus: 'open',
         imageUrl: data.imageUrl ?? null,
         createdAt: data.createdAt ?? new Date().toISOString(),
-        authorName: authorNameRef.current ?? undefined,
-      }
-
-      if (newComment.authorName) {
-        rememberCommentAuthor(newComment.id, newComment.authorName)
+        authorName: data.authorName ?? authorNameRef.current ?? undefined,
       }
 
       setComments((prev) => [newComment, ...prev])
@@ -435,7 +452,10 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
       const isTyping = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 
       if (e.key === 'Escape') {
-        if (selectedPin) {
+        if (showNameModal) {
+          setShowNameModal(false)
+          setNameInput('')
+        } else if (selectedPin) {
           setSelectedPin(null)
         } else if (mode === 'commenting') {
           setTarget(null)
@@ -468,7 +488,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [mode, handleSend, sidebarOpen, selectedPin])
+  }, [mode, handleSend, sidebarOpen, selectedPin, showNameModal])
 
   function exitFeedbackMode() {
     setMode('idle')
@@ -715,8 +735,22 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
           >
             {/* Top row: avatar + input + send */}
             <div style={{ display: 'flex', alignItems: comment.length > 0 || !!image ? 'flex-start' : 'center', gap: 10 }}>
-              {/* Avatar */}
-              <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#3b82f6', flexShrink: 0, marginTop: comment.length > 0 ? 2 : 0 }} />
+              {/* Avatar — click to edit name */}
+              <button
+                type="button"
+                onClick={openNameEditor}
+                title={authorName ? `Signed in as ${authorName} — click to change` : 'Set your name'}
+                style={{
+                  width: 28, height: 28, borderRadius: '50%',
+                  background: '#3b82f6', flexShrink: 0,
+                  marginTop: comment.length > 0 ? 2 : 0,
+                  border: 'none', padding: 0, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#fff', fontSize: 11, fontWeight: 700, fontFamily: 'inherit',
+                }}
+              >
+                {getInitials(authorName) ?? ''}
+              </button>
               {/* Textarea (single row when empty, expands when typing) */}
               <textarea
                 ref={textareaRef}
@@ -948,7 +982,12 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                     width: 28, height: 28, borderRadius: '50%',
                     background: PIN_GRADIENT,
                     flexShrink: 0,
-                  }} />
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: '#fff', fontSize: 11, fontWeight: 700,
+                    textShadow: '0 1px 2px rgba(0,0,0,0.25)',
+                  }}>
+                    {getInitials(c.authorName) ?? ''}
+                  </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ marginBottom: 4, display: 'flex', alignItems: 'baseline', gap: 6 }}>
                       <span style={{ fontSize: 13, fontWeight: 700, color: '#111' }}>{c.authorName ?? 'User'}</span>
@@ -965,7 +1004,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             {/* Pin detail popover */}
             {isSelected && (() => {
               const avColor = avatarColor(c.id)
-              const initial = (c.body[0] || 'U').toUpperCase()
+              const initial = getInitials(c.authorName) ?? (c.body[0] || 'U').toUpperCase()
               const stBadge = c.reviewStatus === 'accepted'
                 ? { bg: '#ecfdf5', color: '#059669', label: 'Approved' }
                 : c.reviewStatus === 'rejected'
@@ -1219,7 +1258,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               const isResolved = c.reviewStatus === 'accepted' || c.reviewStatus === 'rejected'
               const isPending = !c.reviewStatus || c.reviewStatus === 'open'
               const isEditing = editingId === c.id
-              const initial = (c.body[0] || 'U').toUpperCase()
+              const initial = getInitials(c.authorName) ?? (c.body[0] || 'U').toUpperCase()
               const isMenuOpen = menuOpenId === c.id
               return (
                 <div
@@ -1654,10 +1693,11 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             onSubmit={(e) => {
               e.preventDefault()
               if (!nameInput.trim()) return
+              const wasCommenting = mode === 'commenting'
               saveAuthorName(nameInput)
               setShowNameModal(false)
               setNameInput('')
-              setMode('commenting')
+              if (!wasCommenting && target) setMode('commenting')
             }}
             style={{
               width: 360, maxWidth: 'calc(100vw - 32px)',
@@ -1665,8 +1705,30 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
               boxShadow: '0 24px 64px rgba(0, 0, 0, 0.25), 0 4px 12px rgba(0, 0, 0, 0.12)',
               animation: 'fw-modal-card-in 0.22s cubic-bezier(0.16, 1, 0.3, 1) both',
               display: 'flex', flexDirection: 'column', gap: 16,
+              position: 'relative',
             }}
           >
+            {authorNameRef.current && (
+              <button
+                type="button"
+                onClick={() => { setShowNameModal(false); setNameInput('') }}
+                aria-label="Close"
+                style={{
+                  position: 'absolute', top: 12, right: 12,
+                  width: 28, height: 28, borderRadius: '50%',
+                  border: 'none', background: 'transparent',
+                  cursor: 'pointer', color: '#888',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#f5f5f5'; e.currentTarget.style.color = '#111' }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#888' }}
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  <line x1="4" y1="4" x2="12" y2="12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  <line x1="12" y1="4" x2="4" y2="12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
             <div style={{
               width: 44, height: 44, borderRadius: '50% 50% 50% 0',
               background: PIN_GRADIENT,
@@ -1674,7 +1736,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
             }} />
             <div>
               <h2 style={{ fontSize: 18, fontWeight: 700, color: '#111', margin: 0, marginBottom: 6 }}>
-                What's your name?
+                {authorNameRef.current ? 'Change your name' : "What's your name?"}
               </h2>
               <p style={{ fontSize: 13, color: '#666', margin: 0, lineHeight: 1.4 }}>
                 Your name will appear on the comments you leave.
@@ -1712,7 +1774,7 @@ export function FeedbackWidget({ projectId, apiBase }: FeedbackWidgetProps) {
                 fontFamily: 'inherit',
               }}
             >
-              Continue
+              {authorNameRef.current ? 'Save' : 'Continue'}
             </button>
           </form>
         </div>

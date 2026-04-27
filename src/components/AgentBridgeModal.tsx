@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { readAuthorMap } from '../lib/authorStorage'
 
 function pagePath(url: string): string {
   try { return new URL(url).pathname || '/' } catch { return url }
@@ -27,6 +26,7 @@ interface StateResponse {
     implementationStatus: 'unassigned' | 'claimed' | 'in_progress' | 'blocked' | 'done'
     claimedByAgentId: string | null
     createdAt: string
+    authorName?: string | null
   }>
   presence: Array<{
     agentId: string
@@ -316,7 +316,6 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
   }, [apiBase, session])
 
   const acceptedComments = shareState?.comments.filter((c) => c.reviewStatus === 'accepted') ?? []
-  const authorMap = useMemo(() => readAuthorMap(), [shareState])
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const seenIdsRef = useRef<Set<string>>(new Set())
@@ -456,7 +455,7 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {acceptedComments.map((comment) => {
-                    const author = authorMap[comment.id]
+                    const author = comment.authorName ?? null
                     const isSelected = selectedIds.has(comment.id)
                     return (
                       <button
