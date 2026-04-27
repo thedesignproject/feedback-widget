@@ -217,3 +217,7 @@ DELETE /api/comments
 ```
 
 That path is kept for backward compatibility and smoke validation. New product work should target `/api/v1/...`.
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
