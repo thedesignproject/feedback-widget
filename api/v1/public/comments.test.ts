@@ -119,6 +119,7 @@ describe('api/v1/public/comments', () => {
       implementationStatus: 'unassigned',
       claimedByAgentId: null,
       imageUrl: null,
+      authorName: null,
       createdAt: '',
       updatedAt: '',
     })
@@ -145,6 +146,7 @@ describe('api/v1/public/comments', () => {
       y: 20,
       body: 'Hello',
       imageUrl: null,
+      authorName: null,
     })
   })
 
@@ -161,6 +163,7 @@ describe('api/v1/public/comments', () => {
       implementationStatus: 'unassigned',
       claimedByAgentId: null,
       imageUrl: null,
+      authorName: null,
       createdAt: '',
       updatedAt: '',
     })

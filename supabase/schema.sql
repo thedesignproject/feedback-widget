@@ -53,6 +53,9 @@ alter table comments
 alter table comments
   add column if not exists image_url text;
 
+alter table comments
+  add column if not exists author_name text;
+
 create table if not exists feedback_shares (
   id uuid primary key default gen_random_uuid(),
   project_id text not null references projects(public_key) on delete cascade,

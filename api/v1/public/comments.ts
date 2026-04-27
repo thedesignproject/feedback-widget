@@ -78,7 +78,7 @@ async function uploadImage(projectKey: string, mimeType: string, base64Data: str
 
 async function handlePost(req: VercelRequest, res: VercelResponse) {
   try {
-    const { projectKey, projectId, pageUrl, selector, x, y, body, imageBase64, imageMimeType } = req.body ?? {}
+    const { projectKey, projectId, pageUrl, selector, x, y, body, imageBase64, imageMimeType, authorName } = req.body ?? {}
     const resolvedProjectKey = typeof projectKey === 'string' ? projectKey : projectId
 
     if (!resolvedProjectKey || !pageUrl || !selector || !body) {
@@ -87,6 +87,18 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
     if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)) {
       return jsonError(req, res, 400, 'x and y must be finite numbers')
+    }
+
+    let resolvedAuthorName: string | null = null
+    if (authorName !== undefined && authorName !== null) {
+      if (typeof authorName !== 'string') {
+        return jsonError(req, res, 400, 'authorName must be a string')
+      }
+      const trimmed = authorName.trim()
+      if (trimmed.length > 80) {
+        return jsonError(req, res, 400, 'authorName must be 80 characters or fewer')
+      }
+      resolvedAuthorName = trimmed || null
     }
 
     if (imageBase64 !== undefined) {
@@ -116,6 +128,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
       y,
       body,
       imageUrl,
+      authorName: resolvedAuthorName,
     })
 
     setCors(req, res, METHODS)

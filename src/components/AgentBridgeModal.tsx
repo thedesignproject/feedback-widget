@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
+
+function pagePath(url: string): string {
+  try { return new URL(url).pathname || '/' } catch { return url }
+}
 
 type Target = 'claude-code' | 'codex' | 'generic'
 
@@ -22,6 +26,7 @@ interface StateResponse {
     implementationStatus: 'unassigned' | 'claimed' | 'in_progress' | 'blocked' | 'done'
     claimedByAgentId: string | null
     createdAt: string
+    authorName?: string | null
   }>
   presence: Array<{
     agentId: string
@@ -116,6 +121,7 @@ interface State {
   prompts: Record<Target, string>
   shareState: StateResponse | null
   copied: Target | null
+  selected: Target | null
   error: string | null
   tick: number
 }
@@ -139,7 +145,7 @@ function reducer(state: State, action: Action): State {
     case 'state-loaded':
       return { ...state, shareState: action.shareState }
     case 'copied':
-      return { ...state, copied: action.target }
+      return { ...state, copied: action.target, selected: action.target ?? state.selected }
     case 'error':
       return { ...state, error: action.message }
     case 'tick':
@@ -153,6 +159,7 @@ function initState(initialSession: Session | null): State {
     prompts: EMPTY_PROMPTS,
     shareState: null,
     copied: null,
+    selected: null,
     error: null,
     tick: 0,
   }
@@ -228,7 +235,7 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
   const initialSession = useMemo(readShareFromUrl, [])
   const [state, dispatch] = useReducer(reducer, initialSession, initState)
   const modalRef = useRef<HTMLDivElement | null>(null)
-  const { session, prompts, shareState, copied, error } = state
+  const { session, prompts, shareState, copied, selected, error } = state
 
   // Tick every 10s to keep "N seconds ago" labels fresh.
   useEffect(() => {
@@ -308,8 +315,46 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
     }
   }, [apiBase, session])
 
+  const acceptedComments = shareState?.comments.filter((c) => c.reviewStatus === 'accepted') ?? []
+
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const seenIdsRef = useRef<Set<string>>(new Set())
+  const acceptedIds = acceptedComments.map((c) => c.id).join(',')
+  useEffect(() => {
+    setSelectedIds(prev => {
+      const next = new Set<string>()
+      for (const c of acceptedComments) {
+        // Previously seen → preserve user's explicit choice. New → default selected.
+        if (seenIdsRef.current.has(c.id)) {
+          if (prev.has(c.id)) next.add(c.id)
+        } else {
+          next.add(c.id)
+        }
+      }
+      return next
+    })
+    seenIdsRef.current = new Set(acceptedComments.map((c) => c.id))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [acceptedIds])
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }, [])
+
+  const buildPrompt = useCallback((target: Target) => {
+    const original = prompts[target]
+    if (!original) return ''
+    const selected = acceptedComments.filter((c) => selectedIds.has(c.id))
+    if (selected.length === 0 || selected.length === acceptedComments.length) return original
+    const list = selected.map((c, i) => `${i + 1}. "${c.body}" — ${pagePath(c.pageUrl)}`).join('\n')
+    return `ACT ONLY ON THESE FEEDBACK ITEMS (the rest of the prompt may list more — ignore those):\n${list}\n\n---\n\n${original}`
+  }, [prompts, acceptedComments, selectedIds])
+
   const handleCopy = useCallback(async (target: Target) => {
-    const text = prompts[target]
+    const text = buildPrompt(target)
     if (!text) return
     try {
       await navigator.clipboard.writeText(text)
@@ -318,9 +363,7 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
     } catch {
       dispatch({ type: 'error', message: 'Copy failed — select the prompt manually and copy.' })
     }
-  }, [prompts])
-
-  const acceptedComments = shareState?.comments.filter((c) => c.reviewStatus === 'accepted') ?? []
+  }, [buildPrompt])
   const openCount = shareState?.comments.filter((c) => c.reviewStatus === 'open').length ?? 0
   const promptsReady = TARGETS.every(({ id }) => Boolean(prompts[id]))
 
@@ -340,7 +383,7 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
               {shareState?.project.name ?? 'Connect an agent'}
             </div>
             <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
-              Paste one of these prompts into your agent — it joins this session and starts on accepted feedback.
+              Paste one of these prompts into your agent — it joins this session and starts on the feedback ready below.
             </div>
           </div>
           <button
@@ -366,8 +409,9 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
                 target={id}
                 label={label}
                 hint={hint}
-                ready={Boolean(prompts[id])}
+                ready={Boolean(prompts[id]) && (acceptedComments.length === 0 || selectedIds.size > 0)}
                 copied={copied === id}
+                selected={selected === id}
                 onCopy={handleCopy}
               />
             ))}
@@ -401,28 +445,63 @@ export function AgentBridgeModal({ apiBase, projectId, onClose }: AgentBridgeMod
           )}
 
           {shareState && (
-            <Section label={`Accepted feedback (${acceptedComments.length})`}>
+            <Section label={selectedIds.size === acceptedComments.length
+              ? `Ready for agent (${acceptedComments.length})`
+              : `Ready for agent (${selectedIds.size}/${acceptedComments.length} selected)`}>
               {acceptedComments.length === 0 ? (
                 <div style={{ background: '#fafafa', border: '1px dashed #ddd', borderRadius: 10, padding: 16, textAlign: 'center', color: '#888', fontSize: 13 }}>
                   No accepted comments yet. They'll show up here the moment a reviewer accepts one.
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {acceptedComments.map((comment) => (
-                    <div key={comment.id} style={{ background: '#fff', border: '1px solid #eee', borderRadius: 10, padding: 12 }}>
-                      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, color: '#111', lineHeight: 1.5, marginBottom: 4 }}>{comment.body}</div>
-                          <div style={{ fontSize: 12, color: '#aaa', fontFamily: MONO, wordBreak: 'break-all' }}>
-                            {comment.pageUrl} · {comment.selector}
+                  {acceptedComments.map((comment) => {
+                    const author = comment.authorName ?? null
+                    const isSelected = selectedIds.has(comment.id)
+                    return (
+                      <button
+                        type="button"
+                        key={comment.id}
+                        onClick={() => toggleSelected(comment.id)}
+                        style={{
+                          display: 'block', textAlign: 'left', width: '100%',
+                          background: isSelected ? '#fff' : '#fafafa',
+                          border: `1px solid ${isSelected ? '#0f172a' : '#eee'}`,
+                          borderRadius: 10, padding: 12, cursor: 'pointer',
+                          fontFamily: 'inherit',
+                          opacity: isSelected ? 1 : 0.55,
+                          transition: 'background 0.15s, border-color 0.15s, opacity 0.15s',
+                        }}
+                      >
+                        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                          <div style={{
+                            width: 18, height: 18, borderRadius: 4, flexShrink: 0,
+                            border: `1.5px solid ${isSelected ? '#0f172a' : '#d4d4d4'}`,
+                            background: isSelected ? '#0f172a' : 'transparent',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: '#fff', marginTop: 1,
+                            transition: 'all 0.15s',
+                          }}>
+                            {isSelected && (
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+                            )}
                           </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, color: '#111', lineHeight: 1.5, marginBottom: 6 }}>{comment.body}</div>
+                            <div style={{ fontSize: 11, color: '#999', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              {author && <span style={{ fontWeight: 600, color: '#666' }}>{author}</span>}
+                              {author && <span aria-hidden="true">·</span>}
+                              <span>{timeAgo(comment.createdAt)}</span>
+                              <span aria-hidden="true">·</span>
+                              <span style={{ fontFamily: MONO }}>{pagePath(comment.pageUrl)}</span>
+                            </div>
+                          </div>
+                          {comment.implementationStatus !== 'unassigned' && (
+                            <StatusPill status={comment.implementationStatus} />
+                          )}
                         </div>
-                        {comment.implementationStatus !== 'unassigned' && (
-                          <StatusPill status={comment.implementationStatus} />
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                      </button>
+                    )
+                  })}
                 </div>
               )}
             </Section>
@@ -453,29 +532,48 @@ interface TargetButtonProps {
   hint: string
   ready: boolean
   copied: boolean
+  selected: boolean
   onCopy: (target: Target) => void
 }
 
-function TargetButton({ target, label, hint, ready, copied, onCopy }: TargetButtonProps) {
+function TargetButton({ target, label, hint, ready, copied, selected, onCopy }: TargetButtonProps) {
+  const [hovered, setHovered] = useState(false)
+  const isCopied = copied
+  const isSelected = selected && !copied
   const style: CSSProperties = {
     ...targetButtonBase,
-    background: copied ? '#0f172a' : '#fff',
-    color: copied ? '#f8fafc' : '#111',
-    border: `1px solid ${copied ? '#0f172a' : '#e5e5e5'}`,
+    position: 'relative',
+    background: isCopied ? '#0f172a' : isSelected ? '#fafafa' : hovered && ready ? '#fafafa' : '#fff',
+    color: isCopied ? '#f8fafc' : '#111',
+    border: `1px solid ${isCopied ? '#0f172a' : isSelected ? '#0f172a' : hovered && ready ? '#cbd5e1' : '#e5e5e5'}`,
     cursor: ready ? 'pointer' : 'default',
     opacity: ready ? 1 : 0.55,
+    transition: 'background 0.15s, border-color 0.15s',
   }
   return (
     <button
       type="button"
       onClick={() => onCopy(target)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       disabled={!ready}
       style={style}
     >
+      {isSelected && (
+        <div style={{
+          position: 'absolute', top: 8, right: 8,
+          width: 16, height: 16, borderRadius: '50%',
+          background: '#0f172a', color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 10, fontWeight: 700,
+        }}>
+          ✓
+        </div>
+      )}
       <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 3 }}>
-        {copied ? 'Copied ✓' : ready ? `Copy ${label}` : label}
+        {isCopied ? 'Copied ✓' : ready ? `Copy ${label}` : label}
       </div>
-      <div style={{ fontSize: 12, color: copied ? '#94a3b8' : '#888' }}>
+      <div style={{ fontSize: 12, color: isCopied ? '#94a3b8' : '#888' }}>
         {ready ? hint : 'Loading…'}
       </div>
     </button>
