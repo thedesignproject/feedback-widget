@@ -436,6 +436,7 @@ function FeedbackWidgetInner({
 
   // Launcher hover/menu state.
   const [pillHover, setPillHover] = useState(false)
+  const [launcherFocused, setLauncherFocused] = useState(false)
   const [launcherOpen, setLauncherOpen] = useState(false)
   const [selectingHintShown, setSelectingHintShown] = useState(false)
   const [showSelectingHint, setShowSelectingHint] = useState(false)
@@ -1093,6 +1094,7 @@ function FeedbackWidgetInner({
   const avatarInitial = authorName ? (getInitials(authorName) ?? authorName[0]?.toUpperCase() ?? 'U') : 'U'
   const badgeAnimation = badgeAnim ? 'fw-badge-pop 720ms cubic-bezier(0.16, 1, 0.3, 1)' : 'crrt-pulse 2.4s ease-in-out infinite'
   const launcherActive = launcherOpen || mode !== 'idle'
+  const hideWidget = page?.hide
 
   return (
     <div ref={widgetRef} {...{ [WIDGET_ATTR]: '', 'data-fw-crrt': '', 'data-crrt-theme': theme }}>
@@ -2066,6 +2068,8 @@ function FeedbackWidgetInner({
         {...{ [WIDGET_ATTR]: '', 'data-fw-launcher-root': '' }}
         onMouseEnter={onPillEnter}
         onMouseLeave={onPillLeave}
+        onFocus={() => setLauncherFocused(true)}
+        onBlur={() => setLauncherFocused(false)}
         style={{
           position: 'fixed',
           right: 24,
@@ -2082,6 +2086,43 @@ function FeedbackWidgetInner({
         }}
       >
         <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}>
+          {hideWidget && (
+            <button
+              type="button"
+              aria-label="Hide CRRT on this tab"
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                hideWidget()
+              }}
+              style={{
+                position: 'absolute',
+                top: -7,
+                left: -7,
+                zIndex: 2,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 20,
+                height: 20,
+                padding: 0,
+                borderRadius: 9999,
+                border: '1px solid rgba(255, 255, 255, 0.14)',
+                background: '#171717',
+                color: 'rgba(255, 255, 255, 0.78)',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.28)',
+                cursor: 'pointer',
+                opacity: pillHover || launcherFocused ? 1 : 0,
+                pointerEvents: pillHover || launcherFocused ? 'auto' : 'none',
+                transform: pillHover || launcherFocused ? 'scale(1)' : 'scale(0.86)',
+                transition: 'opacity 140ms ease, transform 140ms ease, color 140ms ease',
+              }}
+              onMouseEnter={(event) => { event.currentTarget.style.color = '#FFFFFF' }}
+              onMouseLeave={(event) => { event.currentTarget.style.color = 'rgba(255, 255, 255, 0.78)' }}
+            >
+              <X size={11} strokeWidth={2.25} aria-hidden="true" />
+            </button>
+          )}
           <div
             data-fw-launcher-menu
             id="crrt-launcher-menu"

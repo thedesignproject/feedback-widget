@@ -48,6 +48,12 @@ export default defineBackground(() => {
         const tabId = (sender as { tab?: { id?: number } } | null)?.tab?.id
         return { ok: true, data: typeof tabId === 'number' && await isTabActive(tabId) }
       }
+      if ((message as { type?: unknown } | null)?.type === 'comment:deactivate') {
+        const tabId = (sender as { tab?: { id?: number } } | null)?.tab?.id
+        if (typeof tabId !== 'number') throw new Error('Tab activation unavailable')
+        await browser.storage.session.remove(activeTabKey(tabId))
+        return { ok: true }
+      }
       return undefined
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : 'Unexpected extension error' }

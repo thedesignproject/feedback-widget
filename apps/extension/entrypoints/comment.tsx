@@ -14,20 +14,25 @@ export function mountWidget(activate = false) {
   frame.allow = 'microphone'
   // Match private.html's root scheme so Chrome keeps the embedded canvas transparent on dark sites.
   frame.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;border:0;background:transparent;z-index:2147483647;clip-path:inset(100%);color-scheme:light;'
-  const disconnect = connectPageHost(frame, activate)
   // The extension origin, not the shadow root, isolates typing and private image requests.
   frame.src = browser.runtime.getURL('/private.html')
   host.attachShadow({ mode: 'closed' }).append(frame)
   document.documentElement.append(host)
   let cleaned = false
+  let disconnect = () => {}
   const cleanup = () => {
     if (cleaned) return
     cleaned = true
     disconnect()
     host.remove()
-    window.removeEventListener('crrt:deactivate', cleanup)
+    window.removeEventListener('crrt:deactivate', deactivate)
   }
-  window.addEventListener('crrt:deactivate', cleanup)
+  const deactivate = () => {
+    cleanup()
+    void browser.runtime.sendMessage({ type: 'comment:deactivate' }).catch(() => {})
+  }
+  disconnect = connectPageHost(frame, activate, deactivate)
+  window.addEventListener('crrt:deactivate', deactivate)
   window.addEventListener('pagehide', cleanup, { once: true })
 }
 

@@ -4,7 +4,7 @@ import { captureViewport, type ScreenshotFocusRect } from '../../../src/lib/scre
 import { toPagePercent } from '../../../src/components/FeedbackWidget/coords'
 import { receiveFrameMessages, sendFrameMessage } from './frame-channel'
 
-export function connectPageHost(frame: HTMLIFrameElement, activate: boolean) {
+export function connectPageHost(frame: HTMLIFrameElement, activate: boolean, deactivate: () => void) {
   let frameId = 0, selecting = false, lastState = '', focus: ScreenshotFocusRect | null = null
   let targets: { id: string; selector: string }[] = []
   let hitRects: number[][] = []
@@ -58,6 +58,8 @@ export function connectPageHost(frame: HTMLIFrameElement, activate: boolean) {
       })
     } else if (message.kind === 'highlight') {
       try { const element = document.querySelector<HTMLElement>(message.selector); element?.scrollIntoView({ behavior: 'smooth', block: 'center' }); highlight(element); window.setTimeout(() => highlight(null), 1400) } catch { /* stale selector */ }
+    } else if (message.kind === 'deactivate') {
+      deactivate()
     }
   })
   function move(event: MouseEvent) {
