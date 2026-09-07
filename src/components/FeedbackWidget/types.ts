@@ -28,6 +28,8 @@ export interface WidgetPage {
   selecting(value: boolean): void
   track(comments: { id: string; selector: string }[]): void
   highlight(selector: string): void
+  /** Hide the browser-extension surface for the current tab. */
+  hide?(): void
 }
 
 export interface PersonalComments {

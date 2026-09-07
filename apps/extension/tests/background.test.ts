@@ -73,6 +73,16 @@ describe('extension background', () => {
     await vi.waitFor(() => expect(browser.storage.session.remove).toHaveBeenCalledWith('crrt:active-tab:7'))
   })
 
+  it('deactivates only the tab identified by Chrome', async () => {
+    ;(background as unknown as () => void)()
+    vi.mocked(isAuthMessage).mockReturnValue(false)
+    state.session['crrt:active-tab:7'] = true
+    state.session['crrt:active-tab:8'] = true
+    await expect(send({ type: 'comment:deactivate' }, { tab: { id: 7 } })).resolves.toEqual({ ok: true })
+    expect(state.session).toEqual({ 'crrt:active-tab:8': true })
+    await expect(send({ type: 'comment:deactivate' }, {})).resolves.toEqual({ ok: false, error: 'Tab activation unavailable' })
+  })
+
   it('rolls back activation when injection fails', async () => {
     browser.tabs.query.mockResolvedValue([{ id: 7, url: 'https://example.com' }])
     browser.scripting.executeScript.mockRejectedValueOnce(new Error('restricted'))

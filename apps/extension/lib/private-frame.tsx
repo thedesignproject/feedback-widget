@@ -13,6 +13,7 @@ const actions = {
   selecting: (value: boolean) => tellHost({ kind: 'selecting', value }),
   track: (targets: { id: string; selector: string }[]) => tellHost({ kind: 'track', targets }),
   highlight: (selector: string) => tellHost({ kind: 'highlight', selector }),
+  hide: () => tellHost({ kind: 'deactivate' }),
 }
 
 // Measure interactive surfaces; the transparent frame paints independently of these hit-test bounds.
