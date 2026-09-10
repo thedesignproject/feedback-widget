@@ -34,6 +34,6 @@ Source: `AGENTS.md:15-17`.
 Source: `AGENTS.md:19-21`; `.claude/skills/diff-coverage/SKILL.md:1-24`.
 
 - After any code change, invoke the repo-local `$diff-coverage` skill before handing work back.
-- Require 100% diff line coverage vs `trunk`.
-- Require 100% diff branch coverage vs `trunk`.
-
+- Require 100% diff line coverage against the current PR base.
+- Require 100% diff branch coverage against the current PR base.
+- For stacked PRs, check each layer against the branch immediately below it so tests from higher layers cannot mask gaps in lower layers.

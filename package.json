@@ -35,6 +35,7 @@
     "typecheck": "tsc --project tsconfig.check.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:diff-coverage": "bash scripts/check-diff-coverage.sh",
     "build": "tsc && vite build",
     "build:dashboard": "vite build --config apps/dashboard/vite.config.ts",
     "build:extension": "wxt build --config apps/extension/wxt.config.ts",

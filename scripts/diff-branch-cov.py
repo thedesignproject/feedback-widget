@@ -7,7 +7,8 @@ This script reproduces that locally: parse `git diff --unified=0 BASE...HEAD`,
 intersect changed lines with BRDA records in coverage/lcov.info, print partial
 or fully-untaken branches per file. Exits non-zero if any are found.
 
-Usage: python3 scripts/diff-branch-cov.py [base-branch]   # default: trunk
+Usage: python3 scripts/diff-branch-cov.py [base-branch] [lcov-file]
+Defaults: base branch `trunk`, LCOV file `coverage/lcov.info`.
 Run `bun run test:coverage` first to refresh coverage/lcov.info.
 """
 import re
@@ -17,6 +18,7 @@ import subprocess
 from collections import defaultdict
 
 base = sys.argv[1] if len(sys.argv) > 1 else "trunk"
+coverage_file = sys.argv[2] if len(sys.argv) > 2 else "coverage/lcov.info"
 
 diff = subprocess.check_output(
     [
@@ -41,7 +43,7 @@ for line in diff.split("\n"):
             for i in range(s, s + n):
                 changed[cur].add(i)
 
-with open("coverage/lcov.info") as f:
+with open(coverage_file) as f:
     lcov = f.read()
 
 fail = False

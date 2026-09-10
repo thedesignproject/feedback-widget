@@ -27,4 +27,4 @@ The dashboard ships under a base path (`/dashboard/`), so all in-app routes/link
 
 ## Diff coverage
 
-After any code change, MUST invoke the repo-local `$diff-coverage` skill from `.agents/skills/diff-coverage` before handing work back. Both line and branch diff coverage vs `trunk` required at 100%.
+After any code change, MUST invoke the repo-local `$diff-coverage` skill from `.agents/skills/diff-coverage` before handing work back. Both line and branch diff coverage against the current PR's base are required at 100%. For stacked PRs, validate every layer against the branch immediately below it, not against `trunk`.

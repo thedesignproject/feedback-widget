@@ -19,10 +19,19 @@ jobs:
     name: check (react ${{ matrix.react }})
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - uses: actions/setup-python@v6
+        if: matrix.react == '19' && github.event_name == 'pull_request'
+        with:
+          python-version: '3.13'
       - run: bun install --frozen-lockfile
+      - name: Install diff coverage tooling
+        if: matrix.react == '19' && github.event_name == 'pull_request'
+        run: python3 -m pip install diff-cover==10.0.0
       - name: Install React ${{ matrix.react }}
         env:
           REACT_MAJOR: ${{ matrix.react }}
@@ -34,6 +43,9 @@ jobs:
             "@types/react-dom@$REACT_MAJOR"
       - run: bun run typecheck
       - run: bun run test:coverage
+      - name: Enforce 100% diff coverage
+        if: matrix.react == '19' && github.event_name == 'pull_request'
+        run: bun run test:diff-coverage -- "${{ github.event.pull_request.base.sha }}"
       - name: Upload coverage to Codecov
         if: matrix.react == '19'
         uses: codecov/codecov-action@v7
