@@ -143,10 +143,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         setCors(req, res, METHODS)
         return res.status(201).json({ ...result, createdAt: finalized.createdAt, created: true })
       } catch (error) {
-        if (error instanceof Error && [
-          'linear_request_failed', 'linear_issue_create_failed',
-          'jira_request_failed', 'jira_issue_create_failed', 'jira_issue_type_unavailable', 'jira_project_unavailable',
-        ].includes(error.message)) {
+        const code = error instanceof Error ? error.message : ''
+        const deterministicProviderFailure = (
+          (code.startsWith('linear_') && ![
+            'linear_result_indeterminate', 'linear_issue_persistence_failed', 'linear_issue_creation_in_progress',
+          ].includes(code))
+          || (code.startsWith('jira_') && ![
+            'jira_result_indeterminate', 'jira_issue_persistence_failed', 'jira_issue_creation_in_progress',
+          ].includes(code))
+        )
+        if (deterministicProviderFailure) {
           await releaseCommentExternalWork(claim.id, leaseToken)
         }
         throw error

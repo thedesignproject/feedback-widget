@@ -3,6 +3,8 @@ import { createInstallationAccessToken } from './github-app.js'
 import { closeGithubIssue, createCommentRejectionMarker } from './github-issues.js'
 import { getLinearAccessToken } from './linear-connection.js'
 import { closeLinearIssue, hasLinearWriteScope } from './linear.js'
+import { getJiraAccessToken } from './jira-connection.js'
+import { closeJiraIssue } from './jira.js'
 import {
   cancelExternalWorkClose,
   claimExternalWorkClose,
@@ -142,9 +144,59 @@ export async function closeLinkedLinearIssue(
   }
 }
 
+export async function closeLinkedJiraIssue(
+  projectId: string,
+  commentId: string,
+  expectedUpdatedAt?: string,
+) {
+  if (!(await rejectionIsCurrent(projectId, commentId, expectedUpdatedAt))) return
+  const work = await getCommentExternalWork(commentId, 'jira')
+  if (!work || work.lifecycleStatus === 'closed') return
+  const leaseToken = randomUUID()
+  const claimed = await claimExternalWorkClose(work.id, leaseToken)
+  if (!claimed) return
+
+  try {
+    const integration = await getProjectIntegration(projectId, 'jira')
+    if (!integration || integration.workspaceId !== claimed.workspaceId) {
+      await failExternalWorkClose(claimed.id, leaseToken, 'jira_site_not_connected', true)
+      return
+    }
+    if (!claimed.externalId) {
+      await failExternalWorkClose(claimed.id, leaseToken, 'jira_issue_identity_invalid', true)
+      return
+    }
+    const accessToken = await getJiraAccessToken(integration)
+    await closeJiraIssue(accessToken, {
+      cloudId: integration.workspaceId,
+      issueId: claimed.externalId,
+      comment: EXTERNAL_REJECTION_COMMENT,
+      marker: createCommentRejectionMarker(commentId),
+      beforeClose: () => rejectionIsCurrent(projectId, commentId, expectedUpdatedAt),
+    })
+    await completeExternalWorkClose(claimed.id, leaseToken)
+  } catch (error) {
+    const code = error instanceof Error ? error.message : 'jira_issue_close_failed'
+    if (code === 'external_work_sync_cancelled') {
+      await cancelExternalWorkClose(claimed.id, leaseToken)
+      return
+    }
+    const blocked = [
+      'jira_issue_status_invalid',
+      'jira_rejection_transition_unavailable',
+      'jira_transition_fields_required',
+      'jira_reauthorization_required',
+      'jira_permission_denied',
+      'jira_resource_not_found',
+    ].includes(code)
+    await failExternalWorkClose(claimed.id, leaseToken, code, blocked)
+  }
+}
+
 export async function closeLinkedExternalWork(projectId: string, commentId: string, expectedUpdatedAt?: string) {
   await Promise.all([
     closeLinkedGithubIssue(projectId, commentId, expectedUpdatedAt),
     closeLinkedLinearIssue(projectId, commentId, expectedUpdatedAt),
+    closeLinkedJiraIssue(projectId, commentId, expectedUpdatedAt),
   ])
 }
