@@ -34,6 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       accessTokenCiphertext: encryptToken(tokens.accessToken),
       refreshTokenCiphertext: tokens.refreshToken ? encryptToken(tokens.refreshToken) : null,
       tokenExpiresAt: tokens.expiresAt,
+      grantedScopes: tokens.grantedScopes,
       workspaceId: workspace.id,
       workspaceName: workspace.name,
       containerId: firstTeam?.id ?? null,

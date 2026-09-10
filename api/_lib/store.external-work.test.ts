@@ -28,7 +28,7 @@ type Result = { data: unknown; error: { message: string; code?: string } | null 
 
 const integrationRow = {
   id: 'integration', project_key: 'project', provider: 'linear', access_token_ciphertext: 'access',
-  refresh_token_ciphertext: 'refresh', token_expires_at: null, workspace_id: 'workspace', workspace_name: 'Acme',
+  refresh_token_ciphertext: 'refresh', token_expires_at: null, granted_scopes: 'read,write', workspace_id: 'workspace', workspace_name: 'Acme',
   container_id: 'team', container_name: 'WEB · Web', created_by: 'user', created_at: 'created', updated_at: 'updated',
 }
 const workRow = {
@@ -96,7 +96,7 @@ describe('external integration persistence', () => {
     await expect(updateProjectIntegrationWorkspaceDestination(destination)).resolves.toBeNull()
     await expect(updateProjectIntegrationWorkspaceDestination(destination)).rejects.toThrow('workspace destination failed')
     const tokens = { id: 'integration', accessTokenCiphertext: 'new', refreshTokenCiphertext: null, tokenExpiresAt: null }
-    await expect(updateProjectIntegrationTokens(tokens)).resolves.toMatchObject({ id: 'integration' })
+    await expect(updateProjectIntegrationTokens({ ...tokens, grantedScopes: 'read,write' })).resolves.toMatchObject({ id: 'integration' })
     await expect(updateProjectIntegrationTokens(tokens)).resolves.toBeNull()
     await expect(updateProjectIntegrationTokens(tokens)).rejects.toThrow('token failed')
   })

@@ -2,10 +2,12 @@ import { createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildLinearAuthorizeUrl,
+  closeLinearIssue,
   createLinearIssue,
   createLinearOAuthState,
   exchangeLinearCode,
   getLinearWorkspace,
+  hasLinearWriteScope,
   refreshLinearToken,
   verifyLinearOAuthState,
 } from './linear.js'
@@ -36,8 +38,11 @@ describe('Linear integration client', () => {
     expect(verifyLinearOAuthState(`${state}x`, 101)).toBeNull()
     const url = new URL(buildLinearAuthorizeUrl(state, 'https://crrt.ai/v1/integrations/linear/callback'))
     expect(url.origin + url.pathname).toBe('https://linear.app/oauth/authorize')
-    expect(url.searchParams.get('scope')).toBe('read,issues:create')
+    expect(url.searchParams.get('scope')).toBe('read,write')
     expect(url.searchParams.get('actor')).toBe('user')
+    expect(hasLinearWriteScope('read,write')).toBe(true)
+    expect(hasLinearWriteScope('read issues:create')).toBe(false)
+    expect(hasLinearWriteScope(null)).toBe(false)
   })
 
   it('rejects malformed signed state payloads and missing signing credentials', () => {
@@ -64,9 +69,9 @@ describe('Linear integration client', () => {
   })
 
   it('exchanges codes using form encoding and parses rotating refresh tokens', async () => {
-    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 }), { status: 200 }))
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600, scope: 'read,write' }), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
-    await expect(exchangeLinearCode('code', 'https://crrt.ai/callback')).resolves.toMatchObject({ accessToken: 'access', refreshToken: 'refresh' })
+    await expect(exchangeLinearCode('code', 'https://crrt.ai/callback')).resolves.toMatchObject({ accessToken: 'access', refreshToken: 'refresh', grantedScopes: 'read,write' })
     expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })
     expect(String(fetch.mock.calls[0]?.[1]?.body)).toContain('grant_type=authorization_code')
   })
@@ -78,8 +83,8 @@ describe('Linear integration client', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'invalid' }), { status: 400 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
-    await expect(refreshLinearToken('refresh')).resolves.toEqual({ accessToken: 'access', refreshToken: null, expiresAt: null })
-    await expect(refreshLinearToken('refresh')).resolves.toEqual({ accessToken: 'access', refreshToken: null, expiresAt: null })
+    await expect(refreshLinearToken('refresh')).resolves.toEqual({ accessToken: 'access', refreshToken: null, expiresAt: null, grantedScopes: null })
+    await expect(refreshLinearToken('refresh')).resolves.toEqual({ accessToken: 'access', refreshToken: null, expiresAt: null, grantedScopes: null })
     await expect(refreshLinearToken('refresh')).rejects.toThrow('linear_token_exchange_failed')
     await expect(refreshLinearToken('refresh')).rejects.toThrow('linear_token_exchange_failed')
     expect(String(fetch.mock.calls[0]?.[1]?.body)).toContain('grant_type=refresh_token')
@@ -94,6 +99,12 @@ describe('Linear integration client', () => {
     await expect(getLinearWorkspace('token')).resolves.toEqual({ id: 'w', name: 'Workspace', teams: [{ id: 't', key: 'WEB', name: 'Web' }] })
     await expect(createLinearIssue('token', { teamId: 't', title: 'Title', description: 'Body' })).resolves.toEqual({ externalId: 'i', externalKey: 'WEB-1', externalUrl: 'https://linear.app/issue/WEB-1' })
     await expect(createLinearIssue('token', { teamId: 't', title: 'Title', description: 'Body' })).rejects.toThrow('linear_result_indeterminate')
+
+    fetch.mockResolvedValueOnce(new Response(JSON.stringify({ data: {
+      issueCreate: { success: true, issue: { id: 'i', identifier: 'WEB-1', url: 'javascript:alert(1)' } },
+    } }), { status: 200 }))
+    await expect(createLinearIssue('token', { teamId: 't', title: 'Title', description: 'Body' }))
+      .rejects.toThrow('linear_issue_create_failed')
   })
 
   it('rejects invalid GraphQL responses, workspaces, teams, and issue results', async () => {
@@ -133,5 +144,113 @@ describe('Linear integration client', () => {
       await expect(createLinearIssue('token', { teamId: 't', title: 'Title', description: 'Body' }))
         .rejects.toThrow('linear_issue_create_failed')
     }
+  })
+
+  it('moves an issue to the first canceled state and adds one marked rejection comment', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { issue: {
+        state: { type: 'started' },
+        team: { states: { nodes: [{ id: 'later', name: 'Canceled', position: 2 }, { id: 'first', name: 'Won’t do', position: 1 }] } },
+        comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+      } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { issueUpdate: { success: true } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { commentCreate: { success: true } } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(closeLinearIssue('token', { issueId: 'issue', comment: 'Rejected', marker: '<!-- marker -->' })).resolves.toBeUndefined()
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toMatchObject({ variables: { issueId: 'issue', input: { stateId: 'first' } } })
+    expect(JSON.parse(String(fetch.mock.calls[2]?.[1]?.body))).toMatchObject({ variables: { input: { issueId: 'issue', body: 'Rejected\n\n<!-- marker -->' } } })
+  })
+
+  it('leaves an already-canceled, already-commented issue unchanged', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { issue: {
+      state: { type: 'canceled' }, team: { states: { nodes: [] } }, comments: { nodes: [{ body: 'seen marker' }], pageInfo: { hasNextPage: false, endCursor: null } },
+    } } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    await closeLinearIssue('token', { issueId: 'issue', comment: 'Rejected', marker: 'marker' })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports missing issues, missing canceled states, and rejected mutations', async () => {
+    const response = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200 })
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response({ issue: null }))
+      .mockResolvedValueOnce(response({ issue: { state: { type: 'started' }, team: { states: { nodes: [] } }, comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } }))
+      .mockResolvedValueOnce(response({ issue: { state: { type: 'started' }, team: { states: { nodes: [{ id: 'c', name: 'Canceled', position: 1 }] } }, comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } }))
+      .mockResolvedValueOnce(response({ issueUpdate: { success: false } }))
+      .mockResolvedValueOnce(response({ issue: { state: { type: 'canceled' }, team: { states: { nodes: [] } }, comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } }))
+      .mockResolvedValueOnce(response({ commentCreate: { success: false } }))
+    vi.stubGlobal('fetch', fetch)
+    const input = { issueId: 'issue', comment: 'Rejected', marker: 'marker' }
+    await expect(closeLinearIssue('token', input)).rejects.toThrow('linear_issue_not_found')
+    await expect(closeLinearIssue('token', input)).rejects.toThrow('linear_canceled_state_unavailable')
+    await expect(closeLinearIssue('token', input)).rejects.toThrow('linear_issue_close_failed')
+    await expect(closeLinearIssue('token', input)).rejects.toThrow('linear_issue_comment_failed')
+  })
+
+  it('paginates rejection comments and stops when the marker is found', async () => {
+    const firstPage = Array.from({ length: 100 }, () => ({ body: 'older comment' }))
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { issue: {
+        state: { type: 'canceled' }, team: { states: { nodes: [] } },
+        comments: { nodes: firstPage, pageInfo: { hasNextPage: true, endCursor: 'cursor-1' } },
+      } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { issue: {
+        comments: { nodes: [{ body: 'seen marker' }], pageInfo: { hasNextPage: false, endCursor: null } },
+      } } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    await closeLinearIssue('token', { issueId: 'issue', comment: 'Rejected', marker: 'marker' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(String(fetch.mock.calls[1]?.[1]?.body))).toMatchObject({ variables: { after: 'cursor-1' } })
+  })
+
+  it('rejects malformed rejection comment pagination responses', async () => {
+    const response = (issue: unknown) => new Response(JSON.stringify({ data: { issue } }), { status: 200 })
+    const validIssue = {
+      state: { type: 'canceled' }, team: { states: { nodes: [] } },
+      comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    }
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(response({ ...validIssue, comments: { nodes: null, pageInfo: { hasNextPage: false } } }))
+      .mockResolvedValueOnce(response({ ...validIssue, comments: { nodes: [], pageInfo: { hasNextPage: null } } }))
+      .mockResolvedValueOnce(response({ ...validIssue, comments: { nodes: [], pageInfo: { hasNextPage: true, endCursor: null } } }))
+      .mockResolvedValueOnce(response({ ...validIssue, comments: { nodes: [], pageInfo: { hasNextPage: true, endCursor: 'cursor' } } }))
+      .mockResolvedValueOnce(response(null))
+    vi.stubGlobal('fetch', fetch)
+    const input = { issueId: 'issue', comment: 'Rejected', marker: 'marker' }
+
+    await expect(closeLinearIssue('token', input)).rejects.toThrow('linear_request_failed')
+    await expect(closeLinearIssue('token', input)).rejects.toThrow('linear_request_failed')
+    await expect(closeLinearIssue('token', input)).rejects.toThrow('linear_request_failed')
+    await expect(closeLinearIssue('token', input)).rejects.toThrow('linear_issue_not_found')
+  })
+
+  it('checks the current rejection before each Linear mutation', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { issue: {
+      state: { type: 'started' }, team: { states: { nodes: [{ id: 'c', name: 'Canceled', position: 1 }] } },
+      comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    } } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    await expect(closeLinearIssue('token', {
+      issueId: 'issue', comment: 'Rejected', marker: 'marker', beforeClose: async () => false,
+    })).rejects.toThrow('external_work_sync_cancelled')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('checks a current rejection before adding the Linear explanation', async () => {
+    const issue = {
+      state: { type: 'canceled' }, team: { states: { nodes: [] } },
+      comments: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    }
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { issue } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { issue } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { commentCreate: { success: true } } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const input = { issueId: 'issue', comment: 'Rejected', marker: 'marker' }
+
+    await expect(closeLinearIssue('token', { ...input, beforeClose: async () => false }))
+      .rejects.toThrow('external_work_sync_cancelled')
+    await expect(closeLinearIssue('token', { ...input, beforeClose: async () => true })).resolves.toBeUndefined()
   })
 })

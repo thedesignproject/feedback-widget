@@ -108,6 +108,7 @@ type ProjectIntegrationRow = {
   access_token_ciphertext: string
   refresh_token_ciphertext: string | null
   token_expires_at: string | null
+  granted_scopes: string | null
   workspace_id: string
   workspace_name: string
   container_id: string | null
@@ -147,7 +148,7 @@ const GITHUB_USER_INSTALLATION_COLUMNS =
   'id, user_id, installation_id, github_account_id, github_account_login, github_account_type, last_verified_at'
 
 const PROJECT_INTEGRATION_COLUMNS =
-  'id, project_key, provider, access_token_ciphertext, refresh_token_ciphertext, token_expires_at, workspace_id, workspace_name, container_id, container_name, created_by, created_at, updated_at'
+  'id, project_key, provider, access_token_ciphertext, refresh_token_ciphertext, token_expires_at, granted_scopes, workspace_id, workspace_name, container_id, container_name, created_by, created_at, updated_at'
 const COMMENT_EXTERNAL_WORK_COLUMNS =
   'id, project_id, comment_id, provider, state, workspace_id, container_id, external_id, external_key, external_url, lease_token, lease_expires_at, uncertain_at, lifecycle_status, sync_lease_token, sync_lease_expires_at, last_sync_error, closed_at, created_at, updated_at'
 
@@ -159,6 +160,7 @@ function mapProjectIntegration(row: ProjectIntegrationRow) {
     accessTokenCiphertext: row.access_token_ciphertext,
     refreshTokenCiphertext: row.refresh_token_ciphertext,
     tokenExpiresAt: row.token_expires_at,
+    grantedScopes: row.granted_scopes,
     workspaceId: row.workspace_id,
     workspaceName: row.workspace_name,
     containerId: row.container_id,
@@ -1132,6 +1134,7 @@ export async function upsertProjectIntegration(input: {
   accessTokenCiphertext: string
   refreshTokenCiphertext: string | null
   tokenExpiresAt: string | null
+  grantedScopes?: string | null
   workspaceId: string
   workspaceName: string
   containerId: string | null
@@ -1147,6 +1150,7 @@ export async function upsertProjectIntegration(input: {
       access_token_ciphertext: input.accessTokenCiphertext,
       refresh_token_ciphertext: input.refreshTokenCiphertext,
       token_expires_at: input.tokenExpiresAt,
+      granted_scopes: input.grantedScopes ?? null,
       workspace_id: input.workspaceId,
       workspace_name: input.workspaceName,
       container_id: input.containerId,
@@ -1207,15 +1211,18 @@ export async function updateProjectIntegrationTokens(input: {
   accessTokenCiphertext: string
   refreshTokenCiphertext: string | null
   tokenExpiresAt: string | null
+  grantedScopes?: string | null
 }) {
+  const update: Record<string, unknown> = {
+    access_token_ciphertext: input.accessTokenCiphertext,
+    refresh_token_ciphertext: input.refreshTokenCiphertext,
+    token_expires_at: input.tokenExpiresAt,
+    updated_at: new Date().toISOString(),
+  }
+  if (input.grantedScopes !== undefined) update.granted_scopes = input.grantedScopes
   const { data, error } = await getSupabase()
     .from('project_integrations')
-    .update({
-      access_token_ciphertext: input.accessTokenCiphertext,
-      refresh_token_ciphertext: input.refreshTokenCiphertext,
-      token_expires_at: input.tokenExpiresAt,
-      updated_at: new Date().toISOString(),
-    } as never)
+    .update(update as never)
     .eq('id', input.id)
     .select(PROJECT_INTEGRATION_COLUMNS)
     .maybeSingle()

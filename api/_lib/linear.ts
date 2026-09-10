@@ -19,6 +19,7 @@ export type LinearTokens = {
   accessToken: string
   refreshToken: string | null
   expiresAt: string | null
+  grantedScopes: string | null
 }
 
 function credentials() {
@@ -82,7 +83,7 @@ export function buildLinearAuthorizeUrl(state: string, redirectUri: string) {
   url.searchParams.set('client_id', clientId)
   url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('response_type', 'code')
-  url.searchParams.set('scope', 'read,issues:create')
+  url.searchParams.set('scope', 'read,write')
   url.searchParams.set('actor', 'user')
   url.searchParams.set('state', state)
   return url.toString()
@@ -95,6 +96,7 @@ function parseTokens(body: Record<string, unknown>): LinearTokens {
     accessToken: body.access_token,
     refreshToken: typeof body.refresh_token === 'string' ? body.refresh_token : null,
     expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1_000).toISOString() : null,
+    grantedScopes: typeof body.scope === 'string' ? body.scope : null,
   }
 }
 
@@ -130,6 +132,10 @@ export function refreshLinearToken(refreshToken: string) {
     client_secret: clientSecret,
     grant_type: 'refresh_token',
   }))
+}
+
+export function hasLinearWriteScope(grantedScopes: string | null | undefined) {
+  return Boolean(grantedScopes?.split(/[ ,]+/).includes('write'))
 }
 
 async function linearGraphql<T>(accessToken: string, query: string, variables?: Record<string, unknown>) {
@@ -174,5 +180,80 @@ export async function createLinearIssue(accessToken: string, input: { teamId: st
   })
   const issue = data.issueCreate?.issue
   if (!data.issueCreate?.success || !issue?.id || !issue.identifier || !issue.url) throw new Error('linear_issue_create_failed')
-  return { externalId: issue.id, externalKey: issue.identifier, externalUrl: issue.url }
+  let externalUrl: string
+  try {
+    const url = new URL(issue.url)
+    if (url.protocol !== 'https:' || url.hostname !== 'linear.app') throw new Error('invalid')
+    externalUrl = url.toString()
+  } catch {
+    throw new Error('linear_issue_create_failed')
+  }
+  return { externalId: issue.id, externalKey: issue.identifier, externalUrl }
+}
+
+export async function closeLinearIssue(accessToken: string, input: {
+  issueId: string
+  comment: string
+  marker: string
+  beforeClose?: () => Promise<boolean>
+}) {
+  const context = await linearGraphql<{
+    issue: {
+      state: { type: string } | null
+      team: { states: { nodes: Array<{ id: string; name: string; position: number }> } }
+      comments: {
+        nodes: Array<{ body: string }>
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      }
+    } | null
+  }>(accessToken, `query CRRTIssueCloseContext($issueId: String!, $after: String) {
+    issue(id: $issueId) {
+      state { type }
+      team { states(filter: { type: { eq: "canceled" } }) { nodes { id name position } } }
+      comments(first: 100, after: $after) { nodes { body } pageInfo { hasNextPage endCursor } }
+    }
+  }`, { issueId: input.issueId, after: null })
+  const issue = context.issue
+  if (!issue) throw new Error('linear_issue_not_found')
+  if (
+    !Array.isArray(issue.comments?.nodes)
+    || typeof issue.comments.pageInfo?.hasNextPage !== 'boolean'
+  ) throw new Error('linear_request_failed')
+  let hasMarker = issue.comments.nodes.some((comment) => comment.body.includes(input.marker))
+  let pageInfo = issue.comments.pageInfo
+  while (!hasMarker && pageInfo.hasNextPage) {
+    if (!pageInfo.endCursor) throw new Error('linear_request_failed')
+    const page = await linearGraphql<{
+      issue: { comments: {
+        nodes: Array<{ body: string }>
+        pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      } } | null
+    }>(accessToken, `query CRRTIssueCloseComments($issueId: String!, $after: String!) {
+      issue(id: $issueId) {
+        comments(first: 100, after: $after) { nodes { body } pageInfo { hasNextPage endCursor } }
+      }
+    }`, { issueId: input.issueId, after: pageInfo.endCursor })
+    if (!page.issue) throw new Error('linear_issue_not_found')
+    hasMarker = page.issue.comments.nodes.some((comment) => comment.body.includes(input.marker))
+    pageInfo = page.issue.comments.pageInfo
+  }
+  if (issue.state?.type !== 'canceled') {
+    const canceled = [...issue.team.states.nodes].sort((a, b) => a.position - b.position)[0]
+    if (!canceled?.id) throw new Error('linear_canceled_state_unavailable')
+    if (input.beforeClose && !(await input.beforeClose())) throw new Error('external_work_sync_cancelled')
+    const updated = await linearGraphql<{ issueUpdate: { success: boolean } }>(
+      accessToken,
+      'mutation CRRTIssueReject($issueId: String!, $input: IssueUpdateInput!) { issueUpdate(id: $issueId, input: $input) { success } }',
+      { issueId: input.issueId, input: { stateId: canceled.id } },
+    )
+    if (!updated.issueUpdate?.success) throw new Error('linear_issue_close_failed')
+  }
+  if (hasMarker) return
+  if (input.beforeClose && !(await input.beforeClose())) throw new Error('external_work_sync_cancelled')
+  const commented = await linearGraphql<{ commentCreate: { success: boolean } }>(
+    accessToken,
+    'mutation CRRTIssueRejectComment($input: CommentCreateInput!) { commentCreate(input: $input) { success } }',
+    { input: { issueId: input.issueId, body: `${input.comment}\n\n${input.marker}` } },
+  )
+  if (!commented.commentCreate?.success) throw new Error('linear_issue_comment_failed')
 }

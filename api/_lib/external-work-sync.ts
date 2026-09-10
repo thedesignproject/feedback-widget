@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { createInstallationAccessToken } from './github-app.js'
 import { closeGithubIssue, createCommentRejectionMarker } from './github-issues.js'
+import { getLinearAccessToken } from './linear-connection.js'
+import { closeLinearIssue, hasLinearWriteScope } from './linear.js'
 import {
   cancelExternalWorkClose,
   claimExternalWorkClose,
@@ -11,6 +13,7 @@ import {
   getComment,
   getCommentForGithubIssue,
   getGithubIssueConnection,
+  getProjectIntegration,
 } from './store.js'
 
 export const EXTERNAL_REJECTION_COMMENT = 'Closed automatically because the originating feedback was rejected in CRRT.'
@@ -92,4 +95,56 @@ export async function closeLinkedGithubIssue(
     }
     await failExternalWorkClose(claimed.id, leaseToken, code)
   }
+}
+
+export async function closeLinkedLinearIssue(
+  projectId: string,
+  commentId: string,
+  expectedUpdatedAt?: string,
+) {
+  if (!(await rejectionIsCurrent(projectId, commentId, expectedUpdatedAt))) return
+  const work = await getCommentExternalWork(commentId, 'linear')
+  if (!work || work.lifecycleStatus === 'closed') return
+  const leaseToken = randomUUID()
+  const claimed = await claimExternalWorkClose(work.id, leaseToken)
+  if (!claimed) return
+
+  try {
+    const integration = await getProjectIntegration(projectId, 'linear')
+    if (!integration || integration.workspaceId !== claimed.workspaceId) {
+      await failExternalWorkClose(claimed.id, leaseToken, 'linear_workspace_not_connected', true)
+      return
+    }
+    if (!hasLinearWriteScope(integration.grantedScopes)) {
+      await failExternalWorkClose(claimed.id, leaseToken, 'linear_reauthorization_required', true)
+      return
+    }
+    if (!claimed.externalId) {
+      await failExternalWorkClose(claimed.id, leaseToken, 'linear_issue_identity_invalid', true)
+      return
+    }
+    const accessToken = await getLinearAccessToken(integration)
+    await closeLinearIssue(accessToken, {
+      issueId: claimed.externalId,
+      comment: EXTERNAL_REJECTION_COMMENT,
+      marker: createCommentRejectionMarker(commentId),
+      beforeClose: () => rejectionIsCurrent(projectId, commentId, expectedUpdatedAt),
+    })
+    await completeExternalWorkClose(claimed.id, leaseToken)
+  } catch (error) {
+    const code = error instanceof Error ? error.message : 'linear_issue_close_failed'
+    if (code === 'external_work_sync_cancelled') {
+      await cancelExternalWorkClose(claimed.id, leaseToken)
+      return
+    }
+    const blocked = ['linear_issue_not_found', 'linear_canceled_state_unavailable', 'linear_reauthorization_required'].includes(code)
+    await failExternalWorkClose(claimed.id, leaseToken, code, blocked)
+  }
+}
+
+export async function closeLinkedExternalWork(projectId: string, commentId: string, expectedUpdatedAt?: string) {
+  await Promise.all([
+    closeLinkedGithubIssue(projectId, commentId, expectedUpdatedAt),
+    closeLinkedLinearIssue(projectId, commentId, expectedUpdatedAt),
+  ])
 }

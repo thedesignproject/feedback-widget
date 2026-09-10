@@ -10,7 +10,7 @@ import { updateProjectIntegrationTokens } from './store.js'
 
 const integration = {
   id: 'integration', accessTokenCiphertext: 'access', refreshTokenCiphertext: 'refresh',
-  tokenExpiresAt: new Date(Date.now() + 120_000).toISOString(),
+  tokenExpiresAt: new Date(Date.now() + 120_000).toISOString(), grantedScopes: 'read,write',
 }
 
 beforeEach(() => vi.clearAllMocks())
@@ -29,17 +29,17 @@ describe('getLinearAccessToken', () => {
 
   it('refreshes and persists rotating and retained refresh tokens', async () => {
     vi.mocked(refreshLinearToken)
-      .mockResolvedValueOnce({ accessToken: 'new-access', refreshToken: 'new-refresh', expiresAt: 'later' })
-      .mockResolvedValueOnce({ accessToken: 'newer-access', refreshToken: null, expiresAt: null })
+      .mockResolvedValueOnce({ accessToken: 'new-access', refreshToken: 'new-refresh', expiresAt: 'later', grantedScopes: 'read,write' })
+      .mockResolvedValueOnce({ accessToken: 'newer-access', refreshToken: null, expiresAt: null, grantedScopes: null })
 
     await expect(getLinearAccessToken({ ...integration, tokenExpiresAt: new Date(0).toISOString() })).resolves.toBe('new-access')
     expect(updateProjectIntegrationTokens).toHaveBeenLastCalledWith({
-      id: 'integration', accessTokenCiphertext: 'cipher:new-access', refreshTokenCiphertext: 'cipher:new-refresh', tokenExpiresAt: 'later',
+      id: 'integration', accessTokenCiphertext: 'cipher:new-access', refreshTokenCiphertext: 'cipher:new-refresh', tokenExpiresAt: 'later', grantedScopes: 'read,write',
     })
 
     await expect(getLinearAccessToken({ ...integration, tokenExpiresAt: new Date(0).toISOString() })).resolves.toBe('newer-access')
     expect(updateProjectIntegrationTokens).toHaveBeenLastCalledWith({
-      id: 'integration', accessTokenCiphertext: 'cipher:newer-access', refreshTokenCiphertext: 'refresh', tokenExpiresAt: null,
+      id: 'integration', accessTokenCiphertext: 'cipher:newer-access', refreshTokenCiphertext: 'refresh', tokenExpiresAt: null, grantedScopes: 'read,write',
     })
   })
 })

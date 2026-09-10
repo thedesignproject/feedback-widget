@@ -2,22 +2,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('./github-app.js', () => ({ createInstallationAccessToken: vi.fn() }))
 vi.mock('./github-issues.js', () => ({ closeGithubIssue: vi.fn(), createCommentRejectionMarker: vi.fn(() => 'marker') }))
+vi.mock('./linear-connection.js', () => ({ getLinearAccessToken: vi.fn() }))
+vi.mock('./linear.js', () => ({ closeLinearIssue: vi.fn(), hasLinearWriteScope: vi.fn((scopes: string | null) => scopes?.includes('write')) }))
 vi.mock('./store.js', () => ({
   cancelExternalWorkClose: vi.fn(), claimExternalWorkClose: vi.fn(), completeExternalWorkClose: vi.fn(), ensureGithubExternalWork: vi.fn(),
   failExternalWorkClose: vi.fn(), getCommentExternalWork: vi.fn(), getCommentForGithubIssue: vi.fn(),
-  getComment: vi.fn(), getGithubIssueConnection: vi.fn(),
+  getComment: vi.fn(), getGithubIssueConnection: vi.fn(), getProjectIntegration: vi.fn(),
 }))
 
-import { closeLinkedGithubIssue, EXTERNAL_REJECTION_COMMENT } from './external-work-sync.js'
+import { closeLinkedExternalWork, closeLinkedGithubIssue, closeLinkedLinearIssue, EXTERNAL_REJECTION_COMMENT } from './external-work-sync.js'
 import { createInstallationAccessToken } from './github-app.js'
 import { closeGithubIssue } from './github-issues.js'
+import { getLinearAccessToken } from './linear-connection.js'
+import { closeLinearIssue } from './linear.js'
 import {
   cancelExternalWorkClose, claimExternalWorkClose, completeExternalWorkClose, ensureGithubExternalWork, failExternalWorkClose,
-  getComment, getCommentExternalWork, getCommentForGithubIssue, getGithubIssueConnection,
+  getComment, getCommentExternalWork, getCommentForGithubIssue, getGithubIssueConnection, getProjectIntegration,
 } from './store.js'
 
 const work = {
-  id: 'work', lifecycleStatus: 'active', containerId: 'acme/site', externalId: '7', externalUrl: 'url',
+  id: 'work', lifecycleStatus: 'active', workspaceId: 'workspace', containerId: 'acme/site', externalId: '7', externalUrl: 'url',
 }
 
 beforeEach(() => {
@@ -29,7 +33,79 @@ beforeEach(() => {
   vi.mocked(claimExternalWorkClose).mockResolvedValue({ ...work, lifecycleStatus: 'closing' } as never)
   vi.mocked(getGithubIssueConnection).mockResolvedValue({ owner: 'acme', repo: 'site', installationId: '99' } as never)
   vi.mocked(createInstallationAccessToken).mockResolvedValue('token')
+  vi.mocked(getProjectIntegration).mockResolvedValue({ workspaceId: 'workspace', grantedScopes: 'read,write' } as never)
+  vi.mocked(getLinearAccessToken).mockResolvedValue('linear-token')
   vi.mocked(completeExternalWorkClose).mockResolvedValue({ ...work, lifecycleStatus: 'closed' } as never)
+})
+
+describe('external work Linear rejection sync', () => {
+  it('closes a stored Linear issue and records completion', async () => {
+    await closeLinkedLinearIssue('project', 'comment', 'version-1')
+    expect(closeLinearIssue).toHaveBeenCalledWith('linear-token', expect.objectContaining({
+      issueId: '7', comment: EXTERNAL_REJECTION_COMMENT, marker: 'marker',
+    }))
+    expect(completeExternalWorkClose).toHaveBeenCalledWith('work', expect.any(String))
+    await expect(vi.mocked(closeLinearIssue).mock.calls[0][1].beforeClose?.()).resolves.toBe(true)
+  })
+
+  it('ignores absent, closed, or currently leased Linear work', async () => {
+    vi.mocked(getComment).mockResolvedValueOnce({
+      id: 'comment', projectId: 'project', reviewStatus: 'open', updatedAt: 'version-2',
+    } as never)
+    await closeLinkedLinearIssue('project', 'comment', 'version-1')
+    vi.mocked(getCommentExternalWork).mockResolvedValueOnce(null)
+    await closeLinkedLinearIssue('project', 'comment')
+    vi.mocked(getCommentExternalWork).mockResolvedValueOnce({ ...work, lifecycleStatus: 'closed' } as never)
+    await closeLinkedLinearIssue('project', 'comment')
+    vi.mocked(claimExternalWorkClose).mockResolvedValueOnce(null)
+    await closeLinkedLinearIssue('project', 'comment')
+    expect(closeLinearIssue).not.toHaveBeenCalled()
+  })
+
+  it('blocks unsafe workspace, authorization, and identity states', async () => {
+    vi.mocked(getProjectIntegration).mockResolvedValueOnce(null)
+    await closeLinkedLinearIssue('project', 'comment')
+    expect(failExternalWorkClose).toHaveBeenLastCalledWith('work', expect.any(String), 'linear_workspace_not_connected', true)
+
+    vi.mocked(getProjectIntegration).mockResolvedValueOnce({ workspaceId: 'other', grantedScopes: 'read,write' } as never)
+    await closeLinkedLinearIssue('project', 'comment')
+    expect(failExternalWorkClose).toHaveBeenLastCalledWith('work', expect.any(String), 'linear_workspace_not_connected', true)
+
+    vi.mocked(getProjectIntegration).mockResolvedValueOnce({ workspaceId: 'workspace', grantedScopes: 'read' } as never)
+    await closeLinkedLinearIssue('project', 'comment')
+    expect(failExternalWorkClose).toHaveBeenLastCalledWith('work', expect.any(String), 'linear_reauthorization_required', true)
+
+    vi.mocked(claimExternalWorkClose).mockResolvedValueOnce({ ...work, externalId: null, lifecycleStatus: 'closing' } as never)
+    await closeLinkedLinearIssue('project', 'comment')
+    expect(failExternalWorkClose).toHaveBeenLastCalledWith('work', expect.any(String), 'linear_issue_identity_invalid', true)
+  })
+
+  it('records retryable, blocked, and opaque provider failures', async () => {
+    vi.mocked(closeLinearIssue).mockRejectedValueOnce(new Error('linear_request_failed'))
+    await closeLinkedLinearIssue('project', 'comment')
+    expect(failExternalWorkClose).toHaveBeenLastCalledWith('work', expect.any(String), 'linear_request_failed', false)
+
+    vi.mocked(closeLinearIssue).mockRejectedValueOnce(new Error('linear_issue_not_found'))
+    await closeLinkedLinearIssue('project', 'comment')
+    expect(failExternalWorkClose).toHaveBeenLastCalledWith('work', expect.any(String), 'linear_issue_not_found', true)
+
+    vi.mocked(closeLinearIssue).mockRejectedValueOnce('opaque')
+    await closeLinkedLinearIssue('project', 'comment')
+    expect(failExternalWorkClose).toHaveBeenLastCalledWith('work', expect.any(String), 'linear_issue_close_failed', false)
+  })
+
+  it('cancels stale Linear sync without recording a provider failure', async () => {
+    vi.mocked(closeLinearIssue).mockRejectedValueOnce(new Error('external_work_sync_cancelled'))
+    await closeLinkedLinearIssue('project', 'comment', 'version-1')
+    expect(cancelExternalWorkClose).toHaveBeenCalledWith('work', expect.any(String))
+    expect(failExternalWorkClose).not.toHaveBeenCalled()
+  })
+
+  it('runs GitHub and Linear synchronization together', async () => {
+    await closeLinkedExternalWork('project', 'comment')
+    expect(closeGithubIssue).toHaveBeenCalled()
+    expect(closeLinearIssue).toHaveBeenCalled()
+  })
 })
 
 describe('external work GitHub rejection sync', () => {

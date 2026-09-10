@@ -1,25 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('@vercel/functions', () => ({ waitUntil: vi.fn() }))
+
 vi.mock('../../../_lib/auth.js', () => ({ requireProjectCapability: vi.fn(), requireProjectCommentCapability: vi.fn(), requireUser: vi.fn() }))
 vi.mock('../../../_lib/linear-connection.js', () => ({ getLinearAccessToken: vi.fn() }))
 vi.mock('../../../_lib/linear.js', () => ({ createLinearIssue: vi.fn() }))
 vi.mock('../../../_lib/jira-connection.js', () => ({ getJiraAccessToken: vi.fn() }))
 vi.mock('../../../_lib/jira.js', () => ({ createJiraIssue: vi.fn(), getJiraDestinations: vi.fn() }))
+vi.mock('../../../_lib/external-work-sync.js', () => ({ closeLinkedExternalWork: vi.fn() }))
 vi.mock('../../../_lib/store.js', () => ({
-  claimCommentExternalWork: vi.fn(), finalizeCommentExternalWork: vi.fn(), getComment: vi.fn(), getCommentExternalWork: vi.fn(),
+  acceptCommentIfOpen: vi.fn(), claimCommentExternalWork: vi.fn(), finalizeCommentExternalWork: vi.fn(), getComment: vi.fn(), getCommentExternalWork: vi.fn(),
   getCommentForGithubIssue: vi.fn(), getGithubIssueConnection: vi.fn(), getProjectIntegration: vi.fn(), markCommentExternalWorkUncertain: vi.fn(),
-  releaseCommentExternalWork: vi.fn(), updateReviewStatus: vi.fn(),
+  releaseCommentExternalWork: vi.fn(),
 }))
 vi.mock('./github-issue.js', () => ({ default: vi.fn() }))
 
 import handler from './external-work.js'
+import { waitUntil } from '@vercel/functions'
 import githubIssueHandler from './github-issue.js'
+import { closeLinkedExternalWork } from '../../../_lib/external-work-sync.js'
 import { requireProjectCapability, requireProjectCommentCapability, requireUser } from '../../../_lib/auth.js'
 import { getLinearAccessToken } from '../../../_lib/linear-connection.js'
 import { createLinearIssue } from '../../../_lib/linear.js'
 import { getJiraAccessToken } from '../../../_lib/jira-connection.js'
 import { createJiraIssue, getJiraDestinations } from '../../../_lib/jira.js'
-import { claimCommentExternalWork, finalizeCommentExternalWork, getComment, getCommentExternalWork, getCommentForGithubIssue, getGithubIssueConnection, getProjectIntegration, markCommentExternalWorkUncertain, releaseCommentExternalWork, updateReviewStatus } from '../../../_lib/store.js'
+import { acceptCommentIfOpen, claimCommentExternalWork, finalizeCommentExternalWork, getComment, getCommentExternalWork, getCommentForGithubIssue, getGithubIssueConnection, getProjectIntegration, markCommentExternalWorkUncertain, releaseCommentExternalWork } from '../../../_lib/store.js'
 
 function response() {
   return { statusCode: 200, body: null as unknown, headers: {} as Record<string, string>,
@@ -29,10 +34,11 @@ function response() {
 const call = (req: unknown, res: unknown) => (handler as unknown as (request: unknown, response: unknown) => Promise<unknown>)(req, res)
 const post = (draft: unknown = { title: 'Title', body: 'Body' }) => ({ method: 'POST', query: { commentId: 'c' }, body: { provider: 'linear', draft }, headers: {} })
 
-const comment = { id: 'c', projectId: 'p', body: 'Move the CTA above the fold', authorName: 'Client', pageUrl: 'https://example.com', imageUrl: null, selector: '#cta', x: 10, y: 20, targetType: 'element_point' as const, anchor: null, reviewStatus: 'accepted', githubIssue: null }
+const comment = { id: 'c', projectId: 'p', body: 'Move the CTA above the fold', authorName: 'Client', pageUrl: 'https://example.com', imageUrl: null, selector: '#cta', x: 10, y: 20, targetType: 'element_point' as const, anchor: null, reviewStatus: 'accepted', updatedAt: 'version-1', githubIssue: null }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(closeLinkedExternalWork).mockResolvedValue(undefined)
   vi.mocked(requireUser).mockResolvedValue({ userId: 'u', email: 'u@example.com' })
   vi.mocked(requireProjectCommentCapability).mockResolvedValue({ role: 'member' })
   vi.mocked(requireProjectCapability).mockResolvedValue({ role: 'member' })
@@ -55,6 +61,7 @@ beforeEach(() => {
   vi.mocked(createLinearIssue).mockResolvedValue({ externalId: 'issue', externalKey: 'WEB-1', externalUrl: 'https://linear.app/issue/WEB-1' })
   vi.mocked(createJiraIssue).mockResolvedValue({ externalId: 'jira-issue', externalKey: 'WEB-2', externalUrl: 'https://acme.atlassian.net/browse/WEB-2' })
   vi.mocked(finalizeCommentExternalWork).mockResolvedValue({ createdAt: 'now' } as never)
+  vi.mocked(acceptCommentIfOpen).mockResolvedValue(comment as never)
 })
 
 describe('external work endpoint', () => {
@@ -187,7 +194,7 @@ describe('external work endpoint', () => {
     let res = response()
     await call(post(), res)
     expect(res.body).toMatchObject({ created: false, externalUrl: 'url' })
-    expect(updateReviewStatus).toHaveBeenCalled()
+    expect(acceptCommentIfOpen).toHaveBeenCalled()
 
     vi.mocked(getCommentExternalWork).mockResolvedValueOnce(existing as never)
     res = response()
@@ -277,5 +284,29 @@ describe('external work endpoint', () => {
     expect(res.statusCode).toBe(502)
     expect(createJiraIssue).not.toHaveBeenCalled()
     expect(releaseCommentExternalWork).toHaveBeenCalled()
+  })
+
+  it('preserves a concurrent rejection and schedules closure after creation is finalized', async () => {
+    vi.mocked(acceptCommentIfOpen).mockResolvedValueOnce(null)
+    vi.mocked(getComment)
+      .mockResolvedValueOnce(comment as never)
+      .mockResolvedValueOnce({ ...comment, reviewStatus: 'rejected', updatedAt: 'rejected-version' } as never)
+    const res = response()
+    await call(post(), res)
+    expect(res.statusCode).toBe(201)
+    expect(closeLinkedExternalWork).toHaveBeenCalledWith('p', 'c', 'rejected-version')
+    expect(waitUntil).toHaveBeenCalledWith(expect.any(Promise))
+  })
+
+  it('does not schedule closure when the comment disappears after creation', async () => {
+    vi.mocked(acceptCommentIfOpen).mockResolvedValueOnce(null)
+    vi.mocked(getComment)
+      .mockResolvedValueOnce(comment as never)
+      .mockResolvedValueOnce(null)
+    const res = response()
+    await call(post(), res)
+    expect(res.statusCode).toBe(201)
+    expect(closeLinkedExternalWork).not.toHaveBeenCalled()
+    expect(waitUntil).not.toHaveBeenCalled()
   })
 })

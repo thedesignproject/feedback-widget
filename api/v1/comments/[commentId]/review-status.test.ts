@@ -12,7 +12,7 @@ vi.mock('../../../_lib/store.js', () => ({
   getComment: vi.fn(),
   updateReviewStatus: vi.fn(),
 }))
-vi.mock('../../../_lib/external-work-sync.js', () => ({ closeLinkedGithubIssue: vi.fn() }))
+vi.mock('../../../_lib/external-work-sync.js', () => ({ closeLinkedExternalWork: vi.fn() }))
 
 import handler from './review-status.js'
 import { waitUntil } from '@vercel/functions'
@@ -23,7 +23,7 @@ import {
   getComment,
   updateReviewStatus,
 } from '../../../_lib/store.js'
-import { closeLinkedGithubIssue } from '../../../_lib/external-work-sync.js'
+import { closeLinkedExternalWork } from '../../../_lib/external-work-sync.js'
 
 function mockRes() {
   return {
@@ -46,8 +46,8 @@ beforeEach(() => {
   vi.mocked(updateReviewStatus).mockReset()
   vi.mocked(findActiveSharesForComment).mockReset()
   vi.mocked(createFeedbackEvent).mockReset()
-  vi.mocked(closeLinkedGithubIssue).mockReset()
-  vi.mocked(closeLinkedGithubIssue).mockResolvedValue(undefined)
+  vi.mocked(closeLinkedExternalWork).mockReset()
+  vi.mocked(closeLinkedExternalWork).mockResolvedValue(undefined)
   vi.mocked(waitUntil).mockReset()
 })
 
@@ -117,7 +117,7 @@ describe('api/v1/comments/[commentId]/review-status', () => {
     expect(res.statusCode).toBe(500)
   })
 
-  it('schedules linked GitHub closure for every rejection attempt', async () => {
+  it('schedules linked external-work closure for every rejection attempt', async () => {
     vi.mocked(requireUser).mockResolvedValue({ userId: 'u', email: 'a@b.c' })
     vi.mocked(requireProjectCommentCapability).mockResolvedValue({ role: 'member' })
     vi.mocked(findActiveSharesForComment).mockResolvedValue([])
@@ -126,12 +126,12 @@ describe('api/v1/comments/[commentId]/review-status', () => {
     vi.mocked(getComment).mockResolvedValueOnce({ id: 'c', projectId: 'p', reviewStatus: 'open' } as never)
     let res = mockRes()
     await call({ method: 'PATCH', query: { commentId: 'c' }, body: { reviewStatus: 'rejected' }, headers: {} }, res)
-    expect(closeLinkedGithubIssue).toHaveBeenCalledWith('p', 'c', 'version-1')
+    expect(closeLinkedExternalWork).toHaveBeenCalledWith('p', 'c', 'version-1')
     expect(waitUntil).toHaveBeenCalledWith(expect.any(Promise))
 
     vi.mocked(getComment).mockResolvedValueOnce({ id: 'c', projectId: 'p', reviewStatus: 'rejected' } as never)
     res = mockRes()
     await call({ method: 'PATCH', query: { commentId: 'c' }, body: { reviewStatus: 'rejected' }, headers: {} }, res)
-    expect(closeLinkedGithubIssue).toHaveBeenCalledTimes(2)
+    expect(closeLinkedExternalWork).toHaveBeenCalledTimes(2)
   })
 })

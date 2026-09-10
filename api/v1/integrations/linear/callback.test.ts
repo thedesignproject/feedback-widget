@@ -25,7 +25,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(verifyLinearOAuthState).mockReturnValue(state as never)
   vi.mocked(getProjectMember).mockResolvedValue({ role: 'admin' } as never)
-  vi.mocked(exchangeLinearCode).mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh', expiresAt: 'later' })
+  vi.mocked(exchangeLinearCode).mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh', expiresAt: 'later', grantedScopes: 'read,write' })
   vi.mocked(getLinearWorkspace).mockResolvedValue({ id: 'workspace', name: 'Acme', teams: [{ id: 'team', key: 'WEB', name: 'Web' }] })
 })
 
@@ -48,14 +48,14 @@ describe('Linear OAuth callback', () => {
     await call({ method: 'GET', query: { code: 'code', state: 'state' }, headers: {} }, res)
     expect(upsertProjectIntegration).toHaveBeenCalledWith(expect.objectContaining({
       projectKey: 'p', accessTokenCiphertext: 'encrypted:access', refreshTokenCiphertext: 'encrypted:refresh',
-      containerId: 'team', containerName: 'WEB · Web',
+      containerId: 'team', containerName: 'WEB · Web', grantedScopes: 'read,write',
     }))
     expect(res.headers['Content-Security-Policy']).toContain("default-src 'none'")
     expect(res.body).toContain('"ok":true')
   })
 
   it('supports workspaces without teams or rotating refresh tokens', async () => {
-    vi.mocked(exchangeLinearCode).mockResolvedValueOnce({ accessToken: 'access', refreshToken: null, expiresAt: null })
+    vi.mocked(exchangeLinearCode).mockResolvedValueOnce({ accessToken: 'access', refreshToken: null, expiresAt: null, grantedScopes: null })
     vi.mocked(getLinearWorkspace).mockResolvedValueOnce({ id: 'workspace', name: 'Acme', teams: [] })
     const res = response()
     await call({ method: 'GET', query: { code: 'code', state: 'state' }, headers: {} }, res)
