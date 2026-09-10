@@ -35,6 +35,7 @@ export function mapServerComment(record: CommentRecord): Comment {
     targetType: record.targetType ?? 'element_point',
     anchor: record.anchor ?? null,
     githubIssue: record.githubIssue ?? null,
+    externalWork: record.externalWork ?? [],
   }
 }
 

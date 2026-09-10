@@ -86,9 +86,10 @@ vi.mock('./components/CommentDetail', () => ({
 }))
 vi.mock('./components/Header', () => ({ Header: (props: { onOpenExtensionComments: () => void; onOpenSuperAdmin: () => void; selectedProject: string; extensionCommentsActive: boolean; setSelectedProject: (id: string) => void; onOpenCmd: () => void; toggleTheme: () => void; onOpenCommentActivity: (payload: { projectKey: string; latestCommentId: string }) => void }) => <><button aria-pressed={props.extensionCommentsActive} onClick={props.onOpenExtensionComments}>my comments</button><button aria-pressed={props.selectedProject === 'project-1'} onClick={() => props.setSelectedProject('project-1')}>project</button><button onClick={props.onOpenSuperAdmin}>super admin</button><button onClick={props.onOpenCmd}>search</button><button onClick={props.toggleTheme}>theme</button><button onClick={() => props.onOpenCommentActivity({ projectKey: 'project-1', latestCommentId: 'comment-1' })}>activity</button></> }))
 vi.mock('./components/CommentList', () => ({
-  CommentList: (props: { toggleBulkSelect: (id: string) => void; setSelectedCommentId: (id: string) => void }) => <>
+  CommentList: (props: { toggleBulkSelect: (id: string) => void; setSelectedCommentId: (id: string) => void; applyBulkAction: (action: 'reject') => void }) => <>
     <button onClick={() => props.toggleBulkSelect('comment-1')}>toggle test comment</button>
     <button onClick={() => props.setSelectedCommentId('comment-1')}>select test comment</button>
+    <button onClick={() => props.applyBulkAction('reject')}>bulk reject test</button>
   </>,
 }))
 vi.mock('./components/AgentSidebar', () => ({ AgentSidebar: () => null }))
@@ -115,6 +116,7 @@ beforeEach(() => {
   fixtures.acceptInvite.mockReset().mockResolvedValue(undefined)
   fixtures.updateImpl.mockReset().mockResolvedValue(undefined)
   fixtures.updateReview.mockReset().mockResolvedValue(undefined)
+  fixtures.fn.mockReset()
   fixtures.agentProject.mockReset()
   fixtures.updateVisibility.mockReset().mockResolvedValue(undefined)
   fixtures.comments.splice(0)
@@ -122,7 +124,10 @@ beforeEach(() => {
   fixtures.superadmin = false
   Object.defineProperty(window, 'localStorage', { configurable: true, value: { getItem: vi.fn((key: string) => key === 'dashboard-theme' ? 'dark' : '1'), setItem: vi.fn() } })
 })
-afterEach(() => window.history.replaceState({}, '', '/'))
+afterEach(() => {
+  vi.restoreAllMocks()
+  window.history.replaceState({}, '', '/')
+})
 
 describe('<App /> GitHub issue wiring', () => {
   it('accepts a pending invitation and removes its continuation parameters', async () => {
@@ -197,6 +202,149 @@ describe('<App /> GitHub issue wiring', () => {
     }
     await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(2))
     expect(fixtures.updateImpl).toHaveBeenCalledOnce()
+  })
+
+  it('refreshes issue lifecycle state after a successful bulk rejection', async () => {
+    fixtures.comments.push({
+      id: 'comment-1', projectId: 'project-1', pageUrl: 'https://example.com', selector: 'body', x: 10, y: 20,
+      body: 'Managed feedback', reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
+      imageUrl: null, authorName: 'Member', targetType: 'element_point', anchor: null, githubIssue: null,
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'toggle test comment' }))
+    fireEvent.click(screen.getByRole('button', { name: 'bulk reject test' }))
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledWith(
+      'https://crrt.ai/api', 'session-token', 'comment-1', 'rejected',
+    ))
+    await waitFor(() => expect(fixtures.fn).toHaveBeenCalled())
+  })
+
+  it('does not let an older rejection response refresh over a later review choice', async () => {
+    fixtures.comments.push({
+      id: 'comment-1', projectId: 'project-1', pageUrl: 'https://example.com', selector: 'body', x: 10, y: 20,
+      body: 'Managed feedback', reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
+      imageUrl: null, authorName: 'Member', targetType: 'element_point', anchor: null, githubIssue: null,
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    let resolveReject!: () => void
+    let resolveAccept!: () => void
+    fixtures.updateReview
+      .mockReturnValueOnce(new Promise<void>((resolve) => { resolveReject = resolve }))
+      .mockReturnValueOnce(new Promise<void>((resolve) => { resolveAccept = resolve }))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'select test comment' }))
+    fireEvent.keyDown(window, { key: 'd' })
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(window, { key: 'a' })
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(2))
+
+    await act(async () => resolveAccept())
+    expect(fixtures.fn).toHaveBeenCalledTimes(1)
+    await act(async () => resolveReject())
+    expect(fixtures.fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not refresh when an older individual review fails after a newer choice', async () => {
+    fixtures.comments.push({
+      id: 'comment-1', projectId: 'project-1', pageUrl: 'https://example.com', selector: 'body', x: 10, y: 20,
+      body: 'Managed feedback', reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
+      imageUrl: null, authorName: 'Member', targetType: 'element_point', anchor: null, githubIssue: null,
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let rejectOlder!: (reason?: unknown) => void
+    let resolveNewer!: () => void
+    fixtures.updateReview
+      .mockReturnValueOnce(new Promise<void>((_resolve, reject) => { rejectOlder = reject }))
+      .mockReturnValueOnce(new Promise<void>((resolve) => { resolveNewer = resolve }))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'select test comment' }))
+    fireEvent.keyDown(window, { key: 'd' })
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(window, { key: 'a' })
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(2))
+
+    await act(async () => resolveNewer())
+    expect(fixtures.fn).toHaveBeenCalledTimes(1)
+    await act(async () => rejectOlder(new Error('older failed')))
+    expect(error).toHaveBeenCalledWith('Failed to update review status:', expect.any(Error))
+    expect(fixtures.fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not refresh when an older successful bulk review loses ownership', async () => {
+    fixtures.comments.push({
+      id: 'comment-1', projectId: 'project-1', pageUrl: 'https://example.com', selector: 'body', x: 10, y: 20,
+      body: 'Managed feedback', reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
+      imageUrl: null, authorName: 'Member', targetType: 'element_point', anchor: null, githubIssue: null,
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    let resolveBulk!: () => void
+    let resolveIndividual!: () => void
+    fixtures.updateReview
+      .mockReturnValueOnce(new Promise<void>((resolve) => { resolveBulk = resolve }))
+      .mockReturnValueOnce(new Promise<void>((resolve) => { resolveIndividual = resolve }))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'toggle test comment' }))
+    fireEvent.click(screen.getByRole('button', { name: 'bulk reject test' }))
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'select test comment' }))
+    fireEvent.keyDown(window, { key: 'a' })
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(2))
+
+    await act(async () => resolveIndividual())
+    expect(fixtures.fn).toHaveBeenCalledTimes(1)
+    await act(async () => resolveBulk())
+    expect(fixtures.fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not refresh when an older failed bulk review loses ownership', async () => {
+    fixtures.comments.push({
+      id: 'comment-1', projectId: 'project-1', pageUrl: 'https://example.com', selector: 'body', x: 10, y: 20,
+      body: 'Managed feedback', reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
+      imageUrl: null, authorName: 'Member', targetType: 'element_point', anchor: null, githubIssue: null,
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let rejectBulk!: (reason?: unknown) => void
+    let resolveIndividual!: () => void
+    fixtures.updateReview
+      .mockReturnValueOnce(new Promise<void>((_resolve, reject) => { rejectBulk = reject }))
+      .mockReturnValueOnce(new Promise<void>((resolve) => { resolveIndividual = resolve }))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'toggle test comment' }))
+    fireEvent.click(screen.getByRole('button', { name: 'bulk reject test' }))
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'select test comment' }))
+    fireEvent.keyDown(window, { key: 'a' })
+    await waitFor(() => expect(fixtures.updateReview).toHaveBeenCalledTimes(2))
+
+    await act(async () => resolveIndividual())
+    expect(fixtures.fn).toHaveBeenCalledTimes(1)
+    await act(async () => rejectBulk(new Error('older bulk failed')))
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('Bulk reject'), expect.any(Array))
+    expect(fixtures.fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes the current review after an individual or bulk request fails', async () => {
+    fixtures.comments.push({
+      id: 'comment-1', projectId: 'project-1', pageUrl: 'https://example.com', selector: 'body', x: 10, y: 20,
+      body: 'Managed feedback', reviewStatus: 'open', implementationStatus: 'unassigned', claimedByAgentId: null,
+      imageUrl: null, authorName: 'Member', targetType: 'element_point', anchor: null, githubIssue: null,
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    fixtures.updateReview.mockRejectedValueOnce(new Error('individual failed'))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'select test comment' }))
+    fireEvent.keyDown(window, { key: 'd' })
+    await waitFor(() => expect(fixtures.fn).toHaveBeenCalledTimes(1))
+
+    fixtures.updateReview.mockRejectedValueOnce(new Error('bulk failed'))
+    fireEvent.click(screen.getAllByRole('button', { name: 'toggle test comment' })[0])
+    fireEvent.click(screen.getByRole('button', { name: 'bulk reject test' }))
+    await waitFor(() => expect(fixtures.fn).toHaveBeenCalledTimes(2))
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('Bulk reject'), expect.any(Array))
   })
 
   it('passes a null agent project while an empty project key is selected', async () => {

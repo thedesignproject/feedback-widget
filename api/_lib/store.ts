@@ -41,6 +41,7 @@ type CommentRow = {
   github_issue_lease_token?: string | null
   github_issue_lease_expires_at?: string | null
   github_issue_uncertain_at?: string | null
+  comment_external_work?: PublicCommentExternalWorkRow[]
   created_at: string
   updated_at: string | null
 }
@@ -51,6 +52,8 @@ const COMMENT_COLUMNS =
   'id, project_id, url, x, y, element, comment, status, implementation_status, claimed_by_agent_id, image_url, source, visibility, screenshot_storage_path, author_name, target_type, anchor, created_at, updated_at'
 const COMMENT_GITHUB_ISSUE_COLUMNS =
   `${COMMENT_COLUMNS}, github_issue_number, github_issue_url, github_issue_created_at, github_issue_lease_token, github_issue_lease_expires_at, github_issue_uncertain_at`
+const COMMENT_PROJECT_EXTERNAL_WORK_COLUMNS =
+  `${COMMENT_GITHUB_ISSUE_COLUMNS}, comment_external_work(state, provider, external_id, external_key, external_url, lifecycle_status, closed_at, created_at, updated_at)`
 
 type ProjectRow = {
   public_key: string
@@ -100,6 +103,10 @@ type GitHubUserInstallationRow = {
 
 export type ExternalIntegrationProvider = 'linear' | 'jira'
 export type ExternalWorkProvider = 'github' | ExternalIntegrationProvider
+
+type PublicCommentExternalWorkRow = Pick<CommentExternalWorkRow,
+  'state' | 'provider' | 'external_id' | 'external_key' | 'external_url' | 'lifecycle_status' | 'last_sync_error' | 'closed_at' | 'created_at' | 'updated_at'
+>
 
 type ProjectIntegrationRow = {
   id: string
@@ -152,6 +159,25 @@ const PROJECT_INTEGRATION_COLUMNS =
 const COMMENT_EXTERNAL_WORK_COLUMNS =
   'id, project_id, comment_id, provider, state, workspace_id, container_id, external_id, external_key, external_url, lease_token, lease_expires_at, uncertain_at, lifecycle_status, sync_lease_token, sync_lease_expires_at, last_sync_error, closed_at, created_at, updated_at'
 
+export type ExternalWorkSyncAction = 'retry' | 'reconnect' | 'check_permissions' | 'check_issue' | 'configure_workflow' | null
+
+function externalWorkSyncAction(
+  status: CommentExternalWorkRow['lifecycle_status'],
+  errorCode: string | null,
+): ExternalWorkSyncAction {
+  if (status === 'failed') return 'retry'
+  if (status !== 'blocked' || !errorCode) return null
+  if (errorCode.includes('not_connected') || errorCode.includes('reauthorization_required')) return 'reconnect'
+  if (errorCode.includes('permission_denied')) return 'check_permissions'
+  if (errorCode.includes('identity_invalid') || errorCode.includes('not_found') || errorCode.includes('resource_not_found')) return 'check_issue'
+  if (
+    errorCode.includes('transition')
+    || errorCode.includes('state_unavailable')
+    || errorCode.includes('status_invalid')
+  ) return 'configure_workflow'
+  return 'retry'
+}
+
 function mapProjectIntegration(row: ProjectIntegrationRow) {
   return {
     id: row.id,
@@ -190,6 +216,7 @@ function mapCommentExternalWork(row: CommentExternalWorkRow) {
     syncLeaseToken: row.sync_lease_token,
     syncLeaseExpiresAt: row.sync_lease_expires_at,
     lastSyncError: row.last_sync_error,
+    syncAction: externalWorkSyncAction(row.lifecycle_status, row.last_sync_error),
     closedAt: row.closed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -273,6 +300,17 @@ export type StoredComment = {
     issueUrl: string
     createdAt: string
   } | null
+  externalWork?: Array<{
+    provider: ExternalWorkProvider
+    externalId: string
+    externalKey: string
+    externalUrl: string
+    lifecycleStatus: CommentExternalWorkRow['lifecycle_status']
+    syncAction: ExternalWorkSyncAction
+    closedAt: string | null
+    createdAt: string
+    updatedAt: string
+  }>
 }
 
 function mapComment(row: CommentRow): StoredComment {
@@ -298,15 +336,43 @@ function mapComment(row: CommentRow): StoredComment {
 }
 
 function mapProjectComment(row: CommentRow) {
+  const githubIssue = row.github_issue_number && row.github_issue_url && row.github_issue_created_at
+    ? {
+        issueNumber: row.github_issue_number,
+        issueUrl: row.github_issue_url,
+        createdAt: row.github_issue_created_at,
+      }
+    : null
+  const externalWork = row.comment_external_work
+    ?.filter((work) => work.state === 'created' && work.external_id && work.external_key && work.external_url)
+    .map((work) => ({
+      provider: work.provider,
+      externalId: work.external_id!,
+      externalKey: work.external_key!,
+      externalUrl: work.external_url!,
+      lifecycleStatus: work.lifecycle_status,
+      syncAction: externalWorkSyncAction(work.lifecycle_status, work.last_sync_error),
+      closedAt: work.closed_at,
+      createdAt: work.created_at,
+      updatedAt: work.updated_at,
+    }))
+  if (githubIssue && externalWork && !externalWork.some((work) => work.provider === 'github')) {
+    externalWork.push({
+      provider: 'github',
+      externalId: String(githubIssue.issueNumber),
+      externalKey: `#${githubIssue.issueNumber}`,
+      externalUrl: githubIssue.issueUrl,
+      lifecycleStatus: 'active',
+      syncAction: null,
+      closedAt: null,
+      createdAt: githubIssue.createdAt,
+      updatedAt: githubIssue.createdAt,
+    })
+  }
   return {
     ...mapComment(row),
-    githubIssue: row.github_issue_number && row.github_issue_url && row.github_issue_created_at
-      ? {
-          issueNumber: row.github_issue_number,
-          issueUrl: row.github_issue_url,
-          createdAt: row.github_issue_created_at,
-        }
-      : null,
+    githubIssue,
+    ...(externalWork ? { externalWork } : {}),
   }
 }
 
@@ -1311,7 +1377,7 @@ export async function claimExternalWorkClose(id: string, leaseToken: string) {
     .update(update as never)
     .eq('id', id)
     .eq('state', 'created')
-    .in('lifecycle_status', ['active', 'failed'])
+    .in('lifecycle_status', ['active', 'failed', 'blocked'])
     .is('sync_lease_token', null)
     .select(COMMENT_EXTERNAL_WORK_COLUMNS)
     .maybeSingle()
@@ -1806,7 +1872,7 @@ export async function listProjectComments(projectKey: string, filters: {
   const supabase = getSupabase()
   const columns: string = filters.includeExternalWork === false
     ? COMMENT_COLUMNS
-    : COMMENT_GITHUB_ISSUE_COLUMNS
+    : COMMENT_PROJECT_EXTERNAL_WORK_COLUMNS
   let query = supabase
     .from('comments')
     .select(columns)

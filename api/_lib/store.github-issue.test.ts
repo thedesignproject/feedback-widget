@@ -76,18 +76,42 @@ describe('comment GitHub issue persistence', () => {
     mockResult({ data: [row], error: null })
     expect((await listComments('project-1'))[0]).not.toHaveProperty('githubIssue')
 
-    mockResult({ data: [row], error: null })
-    expect((await listProjectComments('project-1'))[0].githubIssue).toEqual({
+    mockResult({ data: [{ ...row, comment_external_work: [
+      {
+        state: 'created', provider: 'github', external_id: '42', external_key: '#42', external_url: row.github_issue_url,
+        lifecycle_status: 'closed', closed_at: '2026-07-24T12:00:00.000Z', created_at: row.github_issue_created_at, updated_at: '2026-07-24T12:00:00.000Z',
+      },
+      {
+        state: 'created', provider: 'linear', external_id: 'linear-id', external_key: 'WEB-7', external_url: 'https://linear.app/issue/WEB-7',
+        lifecycle_status: 'failed', last_sync_error: 'linear_request_failed', closed_at: null, created_at: row.github_issue_created_at, updated_at: row.github_issue_created_at,
+      },
+      {
+        state: 'creating', provider: 'jira', external_id: null, external_key: null, external_url: null,
+        lifecycle_status: 'active', closed_at: null, created_at: row.github_issue_created_at, updated_at: row.github_issue_created_at,
+      },
+    ] }], error: null })
+    const projectComment = (await listProjectComments('project-1'))[0]
+    expect(projectComment.githubIssue).toEqual({
       issueNumber: 42,
       issueUrl: row.github_issue_url,
       createdAt: row.github_issue_created_at,
     })
+    expect(projectComment.externalWork).toEqual([
+      expect.objectContaining({ provider: 'github', externalKey: '#42', lifecycleStatus: 'closed' }),
+      expect.objectContaining({ provider: 'linear', externalKey: 'WEB-7', lifecycleStatus: 'failed', syncAction: 'retry' }),
+    ])
+
+    mockResult({ data: [{ ...row, comment_external_work: [] }], error: null })
+    expect((await listProjectComments('project-1'))[0].externalWork).toEqual([
+      expect.objectContaining({ provider: 'github', externalKey: '#42', lifecycleStatus: 'active' }),
+    ])
 
     const guestBuilder = mockResult({ data: [row], error: null })
     expect((await listProjectComments('project-1', {
       visibility: 'shared', includeExternalWork: false,
     }))[0]).not.toHaveProperty('githubIssue')
     expect(guestBuilder.select).toHaveBeenCalledWith(expect.not.stringContaining('github_issue_url'))
+    expect(guestBuilder.select).toHaveBeenCalledWith(expect.not.stringContaining('comment_external_work'))
   })
 
   it('maps an incomplete issue as null and applies project filters', async () => {

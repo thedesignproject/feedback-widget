@@ -129,6 +129,24 @@ describe('external integration persistence', () => {
     await expect(listCommentExternalWork('comment')).rejects.toThrow('list failed')
   })
 
+  it('maps provider failures to safe remediation actions', async () => {
+    const cases = [
+      ['failed', 'provider_timeout', 'retry'],
+      ['blocked', 'linear_reauthorization_required', 'reconnect'],
+      ['blocked', 'jira_permission_denied', 'check_permissions'],
+      ['blocked', 'jira_resource_not_found', 'check_issue'],
+      ['blocked', 'jira_transition_fields_required', 'configure_workflow'],
+      ['blocked', 'unknown_blocker', 'retry'],
+      ['active', null, null],
+    ] as const
+    queue({ data: cases.map(([lifecycle, error]) => ({
+      ...workRow, state: 'created', lifecycle_status: lifecycle, last_sync_error: error,
+    })), error: null })
+    await expect(listCommentExternalWork('comment')).resolves.toEqual(cases.map(([, , action]) => (
+      expect.objectContaining({ syncAction: action })
+    )))
+  })
+
   it('bridges persisted GitHub issues into external work', async () => {
     const github = {
       ...workRow, provider: 'github', state: 'created', workspace_id: 'acme', container_id: 'acme/site',

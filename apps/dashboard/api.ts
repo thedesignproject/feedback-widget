@@ -45,6 +45,7 @@ export interface CommentRecord {
   targetType?: CommentTargetType
   anchor?: TextRangeAnchorRecord | null
   githubIssue?: GitHubIssueRecord | null
+  externalWork?: ExternalWorkRecord[]
   createdAt: string
   updatedAt: string
 }
@@ -60,6 +61,18 @@ export interface GitHubIssueCreationResponse extends GitHubIssueRecord {
 }
 
 export type ExternalWorkProvider = 'github' | 'linear' | 'jira'
+
+export interface ExternalWorkRecord {
+  provider: ExternalWorkProvider
+  externalId: string
+  externalKey: string
+  externalUrl: string
+  lifecycleStatus: 'active' | 'closing' | 'closed' | 'failed' | 'blocked'
+  syncAction?: 'retry' | 'reconnect' | 'check_permissions' | 'check_issue' | 'configure_workflow' | null
+  closedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
 
 export interface ExternalWorkDraft {
   provider: ExternalWorkProvider
@@ -690,6 +703,13 @@ export function sendExternalWork(
       headers: { 'Content-Type': 'application/json', ...authHeaders(accessToken) },
       body: JSON.stringify({ provider, draft }),
     },
+  )
+}
+
+export function retryExternalWorkSync(apiBase: string, accessToken: string, commentId: string) {
+  return requestJson<{ externalWork: ExternalWorkRecord[] }>(
+    `${apiBase}/v1/comments/${encodeURIComponent(commentId)}/external-work-sync`,
+    { method: 'POST', headers: { ...authHeaders(accessToken) } },
   )
 }
 
