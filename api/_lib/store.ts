@@ -1253,6 +1253,144 @@ export async function listCommentExternalWork(commentId: string) {
   return ((data ?? []) as CommentExternalWorkRow[]).map(mapCommentExternalWork)
 }
 
+export async function ensureGithubExternalWork(input: {
+  projectId: string
+  commentId: string
+  owner: string
+  repo: string
+  issueNumber: number
+  issueUrl: string
+  createdAt: string
+  leaseToken: string
+}) {
+  const { data, error } = await getSupabase()
+    .from('comment_external_work')
+    .upsert({
+      project_id: input.projectId,
+      comment_id: input.commentId,
+      provider: 'github',
+      state: 'created',
+      workspace_id: input.owner,
+      container_id: `${input.owner}/${input.repo}`,
+      external_id: String(input.issueNumber),
+      external_key: `#${input.issueNumber}`,
+      external_url: input.issueUrl,
+      lease_token: input.leaseToken,
+      lease_expires_at: input.createdAt,
+      lifecycle_status: 'active',
+      updated_at: new Date().toISOString(),
+    } as never, { onConflict: 'comment_id,provider', ignoreDuplicates: true })
+    .select(COMMENT_EXTERNAL_WORK_COLUMNS)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return data
+    ? mapCommentExternalWork(data as CommentExternalWorkRow)
+    : getCommentExternalWork(input.commentId, 'github')
+}
+
+export async function claimExternalWorkClose(id: string, leaseToken: string) {
+  const now = new Date()
+  const leaseExpiresAt = new Date(now.getTime() + 120_000).toISOString()
+  const update = {
+    lifecycle_status: 'closing',
+    sync_lease_token: leaseToken,
+    sync_lease_expires_at: leaseExpiresAt,
+    last_sync_error: null,
+    updated_at: now.toISOString(),
+  }
+  const client = getSupabase()
+  const { data, error } = await client
+    .from('comment_external_work')
+    .update(update as never)
+    .eq('id', id)
+    .eq('state', 'created')
+    .in('lifecycle_status', ['active', 'failed'])
+    .is('sync_lease_token', null)
+    .select(COMMENT_EXTERNAL_WORK_COLUMNS)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (data) return mapCommentExternalWork(data as CommentExternalWorkRow)
+
+  const { data: reclaimed, error: reclaimError } = await getSupabase()
+    .from('comment_external_work')
+    .update(update as never)
+    .eq('id', id)
+    .eq('state', 'created')
+    .eq('lifecycle_status', 'closing')
+    .lt('sync_lease_expires_at', now.toISOString())
+    .select(COMMENT_EXTERNAL_WORK_COLUMNS)
+    .maybeSingle()
+  if (reclaimError) throw new Error(reclaimError.message)
+  return reclaimed ? mapCommentExternalWork(reclaimed as CommentExternalWorkRow) : null
+}
+
+export async function cancelExternalWorkClose(id: string, leaseToken: string) {
+  const { data, error } = await getSupabase()
+    .from('comment_external_work')
+    .update({
+      lifecycle_status: 'active',
+      sync_lease_token: null,
+      sync_lease_expires_at: null,
+      last_sync_error: null,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', id)
+    .eq('state', 'created')
+    .eq('sync_lease_token', leaseToken)
+    .eq('lifecycle_status', 'closing')
+    .select(COMMENT_EXTERNAL_WORK_COLUMNS)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return data ? mapCommentExternalWork(data as CommentExternalWorkRow) : null
+}
+
+export async function completeExternalWorkClose(id: string, leaseToken: string) {
+  const now = new Date().toISOString()
+  const { data, error } = await getSupabase()
+    .from('comment_external_work')
+    .update({
+      lifecycle_status: 'closed',
+      sync_lease_token: null,
+      sync_lease_expires_at: null,
+      last_sync_error: null,
+      closed_at: now,
+      updated_at: now,
+    } as never)
+    .eq('id', id)
+    .eq('state', 'created')
+    .eq('sync_lease_token', leaseToken)
+    .eq('lifecycle_status', 'closing')
+    .select(COMMENT_EXTERNAL_WORK_COLUMNS)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return data ? mapCommentExternalWork(data as CommentExternalWorkRow) : null
+}
+
+export async function failExternalWorkClose(
+  id: string,
+  leaseToken: string,
+  errorCode: string,
+  blocked = false,
+) {
+  const { data, error } = await getSupabase()
+    .from('comment_external_work')
+    .update({
+      lifecycle_status: blocked ? 'blocked' : 'failed',
+      sync_lease_token: null,
+      sync_lease_expires_at: null,
+      last_sync_error: errorCode,
+      updated_at: new Date().toISOString(),
+    } as never)
+    .eq('id', id)
+    .eq('state', 'created')
+    .eq('sync_lease_token', leaseToken)
+    .eq('lifecycle_status', 'closing')
+    .select(COMMENT_EXTERNAL_WORK_COLUMNS)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return data ? mapCommentExternalWork(data as CommentExternalWorkRow) : null
+}
+
 export async function claimCommentExternalWork(input: {
   projectId: string
   commentId: string
@@ -1883,6 +2021,19 @@ export async function updateReviewStatus(
 
   if (error) throw new Error(error.message)
   return mapComment(data as CommentRow)
+}
+
+export async function acceptCommentIfOpen(projectKey: string, commentId: string) {
+  const { data, error } = await getSupabase()
+    .from('comments')
+    .update({ status: 'approved', updated_at: new Date().toISOString() } as never)
+    .eq('id', commentId)
+    .eq('project_id', projectKey)
+    .eq('status', 'pending')
+    .select(COMMENT_COLUMNS)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  return data ? mapComment(data as CommentRow) : null
 }
 
 export async function updateImplementationStatus(commentId: string, patch: {

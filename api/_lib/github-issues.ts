@@ -63,11 +63,32 @@ export function createCommentIssueMarker(commentId: string) {
   return `<!-- crrt-comment:${commentId}:${signature} -->`
 }
 
+export function createCommentRejectionMarker(commentId: string) {
+  const signature = createHmac('sha256', markerSecret())
+    .update(`crrt-comment-rejection:v1:${commentId}`)
+    .digest('base64url')
+  return `<!-- crrt-rejection:${commentId}:${signature} -->`
+}
+
 function validHttpUrl(value: string | null) {
   if (!value) return null
   try {
     const url = new URL(value)
     return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
+function validGithubIssueUrl(value: string, owner: string, repo: string, issueNumber: number) {
+  try {
+    const url = new URL(value)
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/)
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || !match) return null
+    if (decodeURIComponent(match[1]).toLowerCase() !== owner.toLowerCase()) return null
+    if (decodeURIComponent(match[2]).toLowerCase() !== repo.toLowerCase()) return null
+    if (Number(match[3]) !== issueNumber) return null
+    return url.toString()
   } catch {
     return null
   }
@@ -165,7 +186,9 @@ export async function findGithubIssueByMarker(input: {
     || typeof issue.html_url !== 'string'
     || typeof issue.created_at !== 'string'
   ) throw new Error('github_issue_search_failed')
-  return { issueNumber: issue.number, issueUrl: issue.html_url, createdAt: issue.created_at }
+  const issueUrl = validGithubIssueUrl(issue.html_url, input.owner, input.repo, issue.number)
+  if (!issueUrl) throw new Error('github_issue_search_failed')
+  return { issueNumber: issue.number, issueUrl, createdAt: issue.created_at }
 }
 
 export async function createGithubIssue(input: {
@@ -194,7 +217,21 @@ export async function createGithubIssue(input: {
     // Callers must persist an indeterminate state and recover by marker.
     throw new Error('github_issue_result_indeterminate')
   }
-  if (!response.ok) throw new Error('github_issue_create_failed')
+  if (!response.ok) {
+    let providerMessage: string | null = null
+    try {
+      const body = await response.json() as Record<string, unknown>
+      providerMessage = typeof body.message === 'string' ? body.message : null
+    } catch {
+      // The status and request id still make malformed provider responses useful.
+    }
+    console.error('GitHub issue creation failed', {
+      status: response.status,
+      providerMessage,
+      requestId: response.headers.get('x-github-request-id'),
+    })
+    throw new Error('github_issue_create_failed')
+  }
 
   let issue: Record<string, unknown>
   try {
@@ -207,5 +244,48 @@ export async function createGithubIssue(input: {
     || typeof issue.html_url !== 'string'
     || typeof issue.created_at !== 'string'
   ) throw new Error('github_issue_result_indeterminate')
-  return { issueNumber: issue.number, issueUrl: issue.html_url, createdAt: issue.created_at }
+  const issueUrl = validGithubIssueUrl(issue.html_url, input.owner, input.repo, issue.number)
+  if (!issueUrl) throw new Error('github_issue_result_indeterminate')
+  return { issueNumber: issue.number, issueUrl, createdAt: issue.created_at }
+}
+
+export async function closeGithubIssue(input: {
+  accessToken: string
+  owner: string
+  repo: string
+  issueNumber: number
+  comment: string
+  marker: string
+  beforeClose?: () => Promise<boolean>
+}) {
+  const path = `${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}`
+  const issueUrl = `https://api.github.com/repos/${path}/issues/${input.issueNumber}`
+  if (input.beforeClose && !(await input.beforeClose())) throw new Error('external_work_sync_cancelled')
+  const closeResponse = await githubRequest(issueUrl, input.accessToken, {
+    method: 'PATCH',
+    body: JSON.stringify({ state: 'closed', state_reason: 'not_planned' }),
+  })
+  if (!closeResponse.ok) throw new Error('github_issue_close_failed')
+
+  for (let page = 1; ; page += 1) {
+    const commentsResponse = await githubRequest(
+      `${issueUrl}/comments?per_page=100&page=${page}`,
+      input.accessToken,
+    )
+    const commentsBody = await githubJson(commentsResponse)
+    if (!commentsResponse.ok || !Array.isArray(commentsBody)) throw new Error('github_issue_comments_failed')
+    if (commentsBody.some((comment) => (
+      typeof comment === 'object'
+      && comment !== null
+      && typeof (comment as { body?: unknown }).body === 'string'
+      && (comment as { body: string }).body.includes(input.marker)
+    ))) return
+    if (commentsBody.length < 100) break
+  }
+
+  const commentResponse = await githubRequest(`${issueUrl}/comments`, input.accessToken, {
+    method: 'POST',
+    body: JSON.stringify({ body: `${input.comment}\n\n${input.marker}` }),
+  })
+  if (!commentResponse.ok) throw new Error('github_issue_comment_failed')
 }

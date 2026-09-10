@@ -4,9 +4,15 @@ vi.mock('./supabase.js', () => ({ getServiceSupabase: vi.fn() }))
 
 import { getServiceSupabase } from './supabase.js'
 import {
+  acceptCommentIfOpen,
+  cancelExternalWorkClose,
   claimCommentExternalWork,
+  claimExternalWorkClose,
+  completeExternalWorkClose,
   deleteProjectIntegration,
   finalizeCommentExternalWork,
+  ensureGithubExternalWork,
+  failExternalWorkClose,
   getCommentExternalWork,
   listCommentExternalWork,
   getProjectIntegration,
@@ -36,7 +42,7 @@ const workRow = {
 
 function builder(result: Result) {
   const value: Record<string, unknown> = {}
-  for (const method of ['select', 'insert', 'upsert', 'update', 'delete', 'eq', 'is', 'lt']) value[method] = vi.fn(() => value)
+  for (const method of ['select', 'insert', 'upsert', 'update', 'delete', 'eq', 'in', 'is', 'lt']) value[method] = vi.fn(() => value)
   value.single = vi.fn(() => Promise.resolve(result))
   value.maybeSingle = vi.fn(() => Promise.resolve(result))
   value.then = (resolve: (result: Result) => unknown, reject: (error: unknown) => unknown) => Promise.resolve(result).then(resolve, reject)
@@ -121,6 +127,87 @@ describe('external integration persistence', () => {
     expect(list.eq).toHaveBeenCalledWith('state', 'created')
     await expect(listCommentExternalWork('comment')).resolves.toEqual([])
     await expect(listCommentExternalWork('comment')).rejects.toThrow('list failed')
+  })
+
+  it('bridges persisted GitHub issues into external work', async () => {
+    const github = {
+      ...workRow, provider: 'github', state: 'created', workspace_id: 'acme', container_id: 'acme/site',
+      external_id: '7', external_key: '#7', external_url: 'https://github.com/acme/site/issues/7',
+    }
+    queue({ data: github, error: null }, { data: null, error: null }, { data: github, error: null }, { data: null, error: { message: 'bridge failed' } })
+    const input = {
+      projectId: 'project', commentId: 'comment', owner: 'acme', repo: 'site', issueNumber: 7,
+      issueUrl: github.external_url, createdAt: 'created', leaseToken: 'lease',
+    }
+    await expect(ensureGithubExternalWork(input)).resolves.toMatchObject({ provider: 'github', externalKey: '#7' })
+    await expect(ensureGithubExternalWork(input)).resolves.toMatchObject({ provider: 'github' })
+    await expect(ensureGithubExternalWork(input)).rejects.toThrow('bridge failed')
+  })
+
+  it('claims, reclaims, completes, and fails external close work', async () => {
+    const closing = { ...workRow, lifecycle_status: 'closing', sync_lease_token: 'lease', sync_lease_expires_at: 'later' }
+    const closed = { ...closing, lifecycle_status: 'closed', sync_lease_token: null, sync_lease_expires_at: null, closed_at: 'now' }
+    const failed = { ...closing, lifecycle_status: 'failed', sync_lease_token: null, sync_lease_expires_at: null, last_sync_error: 'failed' }
+    const operations = queue(
+      { data: closing, error: null },
+      { data: null, error: null }, { data: closing, error: null },
+      { data: null, error: null }, { data: null, error: null },
+      { data: null, error: null }, { data: null, error: { message: 'reclaim failed' } },
+      { data: null, error: { message: 'claim failed' } },
+      { data: closed, error: null }, { data: null, error: null }, { data: null, error: { message: 'complete failed' } },
+      { data: failed, error: null }, { data: null, error: null }, { data: null, error: { message: 'fail failed' } },
+    )
+    await expect(claimExternalWorkClose('work', 'lease')).resolves.toMatchObject({ lifecycleStatus: 'closing' })
+    expect(operations[0].eq).toHaveBeenCalledWith('state', 'created')
+    await expect(claimExternalWorkClose('work', 'lease')).resolves.toMatchObject({ lifecycleStatus: 'closing' })
+    expect(operations[2].eq).toHaveBeenCalledWith('state', 'created')
+    await expect(claimExternalWorkClose('work', 'lease')).resolves.toBeNull()
+    await expect(claimExternalWorkClose('work', 'lease')).rejects.toThrow('reclaim failed')
+    await expect(claimExternalWorkClose('work', 'lease')).rejects.toThrow('claim failed')
+    await expect(completeExternalWorkClose('work', 'lease')).resolves.toMatchObject({ lifecycleStatus: 'closed' })
+    expect(operations[8].eq).toHaveBeenCalledWith('state', 'created')
+    await expect(completeExternalWorkClose('work', 'lease')).resolves.toBeNull()
+    await expect(completeExternalWorkClose('work', 'lease')).rejects.toThrow('complete failed')
+    await expect(failExternalWorkClose('work', 'lease', 'failed')).resolves.toMatchObject({ lastSyncError: 'failed' })
+    expect(operations[11].eq).toHaveBeenCalledWith('state', 'created')
+    await expect(failExternalWorkClose('work', 'lease', 'failed', true)).resolves.toBeNull()
+    await expect(failExternalWorkClose('work', 'lease', 'failed')).rejects.toThrow('fail failed')
+  })
+
+  it('cancels close work with state and lease fences', async () => {
+    const active = { ...workRow, state: 'created', lifecycle_status: 'active', sync_lease_token: null }
+    const operations = queue(
+      { data: active, error: null },
+      { data: null, error: null },
+      { data: null, error: { message: 'cancel failed' } },
+    )
+    await expect(cancelExternalWorkClose('work', 'lease')).resolves.toMatchObject({ lifecycleStatus: 'active' })
+    expect(operations[0].eq).toHaveBeenCalledWith('id', 'work')
+    expect(operations[0].eq).toHaveBeenCalledWith('state', 'created')
+    expect(operations[0].eq).toHaveBeenCalledWith('sync_lease_token', 'lease')
+    expect(operations[0].eq).toHaveBeenCalledWith('lifecycle_status', 'closing')
+    await expect(cancelExternalWorkClose('work', 'lease')).resolves.toBeNull()
+    await expect(cancelExternalWorkClose('work', 'lease')).rejects.toThrow('cancel failed')
+  })
+
+  it('accepts only open comments within the requested project', async () => {
+    const accepted = {
+      id: 'comment', project_id: 'project', url: null, x: null, y: null, element: null,
+      comment: 'Feedback', status: 'approved', implementation_status: null, claimed_by_agent_id: null,
+      image_url: null, author_name: null, target_type: null, anchor: null,
+      created_at: 'created', updated_at: 'updated',
+    }
+    const operations = queue(
+      { data: accepted, error: null },
+      { data: null, error: null },
+      { data: null, error: { message: 'accept failed' } },
+    )
+    await expect(acceptCommentIfOpen('project', 'comment')).resolves.toMatchObject({ reviewStatus: 'accepted' })
+    expect(operations[0].eq).toHaveBeenCalledWith('id', 'comment')
+    expect(operations[0].eq).toHaveBeenCalledWith('project_id', 'project')
+    expect(operations[0].eq).toHaveBeenCalledWith('status', 'pending')
+    await expect(acceptCommentIfOpen('project', 'comment')).resolves.toBeNull()
+    await expect(acceptCommentIfOpen('project', 'comment')).rejects.toThrow('accept failed')
   })
 
   it('claims newly inserted work and rejects non-conflict insert failures', async () => {
