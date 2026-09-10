@@ -7,6 +7,7 @@ import {
   getJiraIntegration,
   getLinearIntegration,
   getProjectGitHubStatus,
+  retryExternalWorkSync,
   selectJiraProject,
   selectLinearTeam,
   updateImplementationStatus,
@@ -62,6 +63,18 @@ describe('createCommentGithubIssue', () => {
       '/api/v1/comments/comment%2F1/external-work?provider=github',
       expect.objectContaining({ headers: { Authorization: 'Bearer session' } }),
     )
+  })
+
+  it('retries external-work close synchronization with authorization', async () => {
+    const payload = { externalWork: [] }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(retryExternalWorkSync('/api', 'session', 'comment/1')).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/comments/comment%2F1/external-work-sync', {
+      method: 'POST', headers: { Authorization: 'Bearer session' },
+    })
   })
 
   it('reads only the project GitHub connection status without caching', async () => {

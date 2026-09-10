@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../api', () => ({
   getExternalWorkDraft: vi.fn(),
+  retryExternalWorkSync: vi.fn(),
   sendExternalWork: vi.fn(),
 }))
 
-import { getExternalWorkDraft, sendExternalWork } from '../api'
+import { getExternalWorkDraft, retryExternalWorkSync, sendExternalWork } from '../api'
 import type { CommentRecord } from '../api'
 import { mapServerComment } from '../lib/comment'
 import type { Comment } from '../lib/types'
@@ -83,6 +84,7 @@ const props = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(retryExternalWorkSync).mockResolvedValue({ externalWork: [] })
   vi.mocked(sendExternalWork).mockResolvedValue({ ...issue, created: true })
   vi.mocked(getExternalWorkDraft).mockResolvedValue({ provider: 'github', connected: true, destination: 'acme/site', existing: null, draft: { title: 'Improve contrast', body: 'Issue body' } })
 })
@@ -161,8 +163,7 @@ describe('<CommentDetail /> GitHub issue action', () => {
       {...props}
       selectedComment={{ ...comment, reviewStatus: 'rejected', githubIssue: issue }}
     />)
-    fireEvent.click(screen.getByRole('button', { name: 'Send to…' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open GitHub #42' }))
     expect(open).toHaveBeenCalledWith(issue.issueUrl, '_blank', 'noopener,noreferrer')
     expect(opened.opener).toBeNull()
     open.mockRestore()
@@ -171,10 +172,174 @@ describe('<CommentDetail /> GitHub issue action', () => {
   it('handles browsers that block the new tab', async () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
     render(<CommentDetail {...props} selectedComment={{ ...comment, githubIssue: issue }} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Send to…' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open GitHub #42' }))
     expect(open).toHaveBeenCalled()
     open.mockRestore()
+  })
+
+  it('shows direct links and close lifecycle state for every provider', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    render(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [
+      { provider: 'github', externalId: '42', externalKey: '#42', externalUrl: issue.issueUrl, lifecycleStatus: 'closed', closedAt: 'later', createdAt: issue.createdAt, updatedAt: 'later' },
+      { provider: 'linear', externalId: 'linear', externalKey: 'WEB-7', externalUrl: 'https://linear.app/issue/WEB-7', lifecycleStatus: 'closing', closedAt: null, createdAt: issue.createdAt, updatedAt: issue.createdAt },
+      { provider: 'jira', externalId: 'jira', externalKey: 'WEB-8', externalUrl: 'https://acme.atlassian.net/browse/WEB-8', lifecycleStatus: 'blocked', closedAt: null, createdAt: issue.createdAt, updatedAt: issue.createdAt },
+    ] }} />)
+    expect(screen.getByRole('button', { name: 'Open GitHub #42 · Closed' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open Linear WEB-7 · Closing…' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Jira WEB-8 · Needs attention' }))
+    expect(open).toHaveBeenCalledWith('https://acme.atlassian.net/browse/WEB-8', '_blank', 'noopener,noreferrer')
+  })
+
+  it('retries failed close synchronization and refreshes the displayed state', async () => {
+    const failed = { provider: 'linear' as const, externalId: 'linear', externalKey: 'WEB-7', externalUrl: 'https://linear.app/issue/WEB-7', lifecycleStatus: 'failed' as const, closedAt: null, createdAt: issue.createdAt, updatedAt: issue.createdAt }
+    vi.mocked(retryExternalWorkSync).mockResolvedValueOnce({ externalWork: [{ ...failed, lifecycleStatus: 'closed', closedAt: 'later', updatedAt: 'later' }] })
+    const view = render(<CommentDetail {...props} selectedComment={{ ...comment, reviewStatus: 'rejected', externalWork: [failed] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry closing' }))
+    expect(screen.getByRole('button', { name: 'Retrying close…' })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: 'Open Linear WEB-7 · Closed' })).toBeInTheDocument()
+    expect(retryExternalWorkSync).toHaveBeenCalledWith('/api', 'session-token', 'comment-1')
+    view.rerender(<CommentDetail {...props} selectedComment={{ ...comment, reviewStatus: 'rejected', externalWork: [{
+      ...failed, lifecycleStatus: 'active', updatedAt: 'server-active',
+    }] }} />)
+    expect(screen.getByRole('button', { name: 'Open Linear WEB-7 · Closed' })).toBeInTheDocument()
+  })
+
+  it('reports a safe close retry failure', async () => {
+    const failed = { provider: 'jira' as const, externalId: 'jira', externalKey: 'WEB-8', externalUrl: 'https://acme.atlassian.net/browse/WEB-8', lifecycleStatus: 'blocked' as const, syncAction: 'check_permissions' as const, closedAt: null, createdAt: issue.createdAt, updatedAt: issue.createdAt }
+    vi.mocked(retryExternalWorkSync).mockRejectedValueOnce(new Error('secret'))
+    render(<CommentDetail {...props} selectedComment={{ ...comment, reviewStatus: 'rejected', externalWork: [failed] }} />)
+    expect(screen.getByText('Grant Jira permission to update this issue, then retry.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry after fixing' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not retry closing the linked issues. Try again.')
+  })
+
+  it('lets fresher server lifecycle state replace a remembered active issue', async () => {
+    const view = render(<CommentDetail {...props} />)
+    fireEvent.click(await openExternalWorkDraft())
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Open GitHub #42' })).toBeInTheDocument()
+
+    view.rerender(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'github', externalId: '42', externalKey: '#42', externalUrl: issue.issueUrl,
+      lifecycleStatus: 'closed', closedAt: 'closed', createdAt: issue.createdAt, updatedAt: 'closed',
+    }] }} />)
+    expect(screen.getByRole('button', { name: 'Open GitHub #42 · Closed' })).toBeInTheDocument()
+  })
+
+  it('blocks untrusted external-work URLs instead of executing them', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    render(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'linear', externalId: 'i', externalKey: 'WEB-7', externalUrl: 'javascript:alert(1)',
+      lifecycleStatus: 'active', closedAt: null, createdAt: issue.createdAt, updatedAt: issue.createdAt,
+    }] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Linear WEB-7' }))
+    expect(open).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('link is invalid')
+  })
+
+  it('rejects malformed and cross-provider HTTPS issue links', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const { rerender } = render(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'github', externalId: '1', externalKey: '#1', externalUrl: 'https://evil.example/acme/site/issues/1',
+      lifecycleStatus: 'active', closedAt: null, createdAt: 'now', updatedAt: 'now',
+    }] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open GitHub #1' }))
+    rerender(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'linear', externalId: '1', externalKey: 'WEB-1', externalUrl: 'https://evil.example/issue/WEB-1',
+      lifecycleStatus: 'active', closedAt: null, createdAt: 'now', updatedAt: 'now',
+    }] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Linear WEB-1' }))
+    rerender(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'jira', externalId: '1', externalKey: 'WEB-1', externalUrl: 'https://acme.atlassian.net/not-browse/WEB-1',
+      lifecycleStatus: 'active', closedAt: null, createdAt: 'now', updatedAt: 'now',
+    }] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Jira WEB-1' }))
+    rerender(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'jira', externalId: '1', externalKey: 'WEB-1', externalUrl: 'not a url',
+      lifecycleStatus: 'active', closedAt: null, createdAt: 'now', updatedAt: 'now',
+    }] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Jira WEB-1' }))
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('explains each blocked-sync remediation without exposing provider errors', () => {
+    const view = render(<CommentDetail {...props} selectedComment={{ ...comment, reviewStatus: 'rejected', externalWork: [
+      { provider: 'github', externalId: '1', externalKey: '#1', externalUrl: issue.issueUrl, lifecycleStatus: 'blocked', syncAction: 'check_issue', closedAt: null, createdAt: 'now', updatedAt: 'now' },
+      { provider: 'linear', externalId: '2', externalKey: 'WEB-2', externalUrl: 'https://linear.app/issue/WEB-2', lifecycleStatus: 'blocked', syncAction: 'configure_workflow', closedAt: null, createdAt: 'now', updatedAt: 'now' },
+      { provider: 'jira', externalId: '3', externalKey: 'WEB-3', externalUrl: 'https://acme.atlassian.net/browse/WEB-3', lifecycleStatus: 'blocked', syncAction: 'reconnect', closedAt: null, createdAt: 'now', updatedAt: 'now' },
+    ] }} />)
+    expect(screen.getByText('Check that the GitHub issue still exists and matches this project.')).toBeInTheDocument()
+    expect(screen.getByText('Configure a usable rejected or canceled workflow state in Linear, then retry.')).toBeInTheDocument()
+    expect(screen.getByText('Reconnect Jira in Project Settings, then retry.')).toBeInTheDocument()
+    view.rerender(<CommentDetail {...props} selectedComment={{ ...comment, reviewStatus: 'rejected', externalWork: [{
+      provider: 'github', externalId: '1', externalKey: '#1', externalUrl: issue.issueUrl,
+      lifecycleStatus: 'blocked', syncAction: null, closedAt: null, createdAt: 'now', updatedAt: 'now',
+    }] }} />)
+    expect(screen.getByText('Resolve the GitHub issue configuration, then retry.')).toBeInTheDocument()
+  })
+
+  it('uses update time to reconcile remembered and server-active work', async () => {
+    vi.mocked(sendExternalWork).mockResolvedValueOnce({ ...issue, createdAt: '2026-02-01', created: true })
+    const view = render(<CommentDetail {...props} />)
+    fireEvent.click(await openExternalWorkDraft())
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    view.rerender(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'github', externalId: '99', externalKey: '#99', externalUrl: 'https://github.com/acme/site/issues/99',
+      lifecycleStatus: 'active', closedAt: null, createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    }] }} />)
+    expect(screen.getByRole('button', { name: 'Open GitHub #42' })).toBeInTheDocument()
+    view.rerender(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'github', externalId: '99', externalKey: '#99', externalUrl: 'https://github.com/acme/site/issues/99',
+      lifecycleStatus: 'active', closedAt: null, createdAt: '2026-03-01', updatedAt: '2026-03-01',
+    }] }} />)
+    expect(screen.getByRole('button', { name: 'Open GitHub #99' })).toBeInTheDocument()
+  })
+
+  it('falls back safely when active-work timestamps are malformed', async () => {
+    vi.mocked(sendExternalWork).mockResolvedValueOnce({ ...issue, createdAt: 'invalid-local', created: true })
+    const view = render(<CommentDetail {...props} />)
+    fireEvent.click(await openExternalWorkDraft())
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    view.rerender(<CommentDetail {...props} selectedComment={{ ...comment, externalWork: [{
+      provider: 'github', externalId: '99', externalKey: '#99', externalUrl: 'https://github.com/acme/site/issues/99',
+      lifecycleStatus: 'active', closedAt: null, createdAt: 'invalid-server', updatedAt: 'invalid-server',
+    }] }} />)
+    expect(screen.getByRole('button', { name: 'Open GitHub #42' })).toBeInTheDocument()
+  })
+
+  it('fences duplicate close retries before the busy render commits', async () => {
+    const failed = { provider: 'linear' as const, externalId: 'linear', externalKey: 'WEB-7', externalUrl: 'https://linear.app/issue/WEB-7', lifecycleStatus: 'failed' as const, closedAt: null, createdAt: issue.createdAt, updatedAt: issue.createdAt }
+    let resolveRetry!: (value: { externalWork: [] }) => void
+    vi.mocked(retryExternalWorkSync).mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve }))
+    render(<CommentDetail {...props} selectedComment={{ ...comment, reviewStatus: 'rejected', externalWork: [failed] }} />)
+    const retry = screen.getByRole('button', { name: 'Retry closing' })
+    act(() => { retry.click(); retry.click() })
+    expect(retryExternalWorkSync).toHaveBeenCalledTimes(1)
+    resolveRetry({ externalWork: [] })
+    await act(async () => {})
+  })
+
+  it('does not apply late close retry success or failure to another comment', async () => {
+    const failed = { provider: 'jira' as const, externalId: 'jira', externalKey: 'WEB-8', externalUrl: 'https://acme.atlassian.net/browse/WEB-8', lifecycleStatus: 'failed' as const, closedAt: null, createdAt: issue.createdAt, updatedAt: issue.createdAt }
+    const next = { ...comment, id: 'comment-2', body: 'Move the button' }
+    let resolveRetry!: (value: { externalWork: [] }) => void
+    vi.mocked(retryExternalWorkSync).mockReturnValueOnce(new Promise((resolve) => { resolveRetry = resolve }))
+    const first = render(<CommentDetail {...props} selectedComment={{ ...comment, reviewStatus: 'rejected', externalWork: [failed] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry closing' }))
+    first.rerender(<CommentDetail {...props} selectedComment={next} projectComments={[next]} filteredComments={[next]} />)
+    resolveRetry({ externalWork: [] })
+    await act(async () => {})
+    expect(screen.getByText('Move the button')).toBeInTheDocument()
+    first.unmount()
+
+    let rejectRetry!: (reason: Error) => void
+    vi.mocked(retryExternalWorkSync).mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRetry = reject }))
+    const second = render(<CommentDetail {...props} selectedComment={{ ...comment, reviewStatus: 'rejected', externalWork: [failed] }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry closing' }))
+    second.rerender(<CommentDetail {...props} selectedComment={next} projectComments={[next]} filteredComments={[next]} />)
+    rejectRetry(new Error('late failure'))
+    await act(async () => {})
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('shows a safe inline error and allows retry', async () => {
@@ -466,13 +631,18 @@ describe('<CommentDetail /> GitHub issue action', () => {
     vi.mocked(getExternalWorkDraft).mockResolvedValue({ provider: 'linear', connected: true, destination: 'WEB · Web', existing: null, draft: { title: 'Title', body: 'Body' } })
     vi.mocked(sendExternalWork)
       .mockResolvedValueOnce({ created: true } as never)
-      .mockResolvedValueOnce({ externalUrl: 'https://linear.app/issue/WEB-2', created: true } as never)
+      .mockResolvedValueOnce({ externalUrl: 'https://linear.app/issue/WEB-2', createdAt: 'now', created: true } as never)
+      .mockResolvedValueOnce({
+        externalId: 'i', externalKey: 'WEB-2', externalUrl: 'https://linear.app/issue/WEB-2', createdAt: 'now', created: true,
+      })
     vi.spyOn(window, 'open').mockReturnValue(null)
     render(<CommentDetail {...props} />)
     const send = screen.getByRole('button', { name: 'Send to…' })
     fireEvent.click(send)
     fireEvent.click(await screen.findByRole('button', { name: 'Linear' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Create issue' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not create the external issue')
+    fireEvent.click(screen.getByRole('button', { name: 'Create issue' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not create the external issue')
     fireEvent.click(screen.getByRole('button', { name: 'Create issue' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
@@ -482,9 +652,13 @@ describe('<CommentDetail /> GitHub issue action', () => {
     const open = vi.spyOn(window, 'open').mockReturnValue(null)
     vi.mocked(getExternalWorkDraft)
       .mockResolvedValueOnce({ provider: 'linear', connected: true, destination: 'WEB · Web', existing: { externalId: 'i', externalKey: 'WEB-1', externalUrl: '', createdAt: 'now' }, draft: { title: '', body: '' } })
+      .mockResolvedValueOnce({ provider: 'linear', connected: true, destination: 'WEB · Web', existing: { externalId: '', externalKey: '', externalUrl: 'https://linear.app/issue/WEB-1', createdAt: 'now' }, draft: { title: '', body: '' } })
       .mockResolvedValueOnce({ provider: 'linear', connected: true, destination: 'WEB · Web', existing: { externalId: 'i', externalKey: 'WEB-1', externalUrl: 'https://linear.app/issue/WEB-1', createdAt: 'now' }, draft: { title: '', body: '' } })
     render(<CommentDetail {...props} />)
     const send = screen.getByRole('button', { name: 'Send to…' })
+    fireEvent.click(send)
+    fireEvent.click(await screen.findByRole('button', { name: 'Linear' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not prepare the Linear issue')
     fireEvent.click(send)
     fireEvent.click(await screen.findByRole('button', { name: 'Linear' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not prepare the Linear issue')

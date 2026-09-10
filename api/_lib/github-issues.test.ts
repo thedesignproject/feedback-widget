@@ -367,4 +367,20 @@ describe('GitHub issue requests', () => {
       })).rejects.toThrow('github_issue_search_failed')
     }
   })
+
+  it('rejects GitHub issue URLs whose repository identity does not match', async () => {
+    for (const html_url of [
+      'https://github.com/other/site/issues/7',
+      'https://github.com/acme/other/issues/7',
+      'https://github.com/acme/site/issues/8',
+      'https://github.com/%E0%A4%A/site/issues/7',
+    ]) {
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+        number: 7, html_url, created_at: '2026-07-23T12:00:00Z',
+      }), { status: 201 }))
+      await expect(createGithubIssue({
+        accessToken: 'token', owner: 'acme', repo: 'site', title: 'Title', body: 'Body',
+      })).rejects.toThrow('github_issue_result_indeterminate')
+    }
+  })
 })

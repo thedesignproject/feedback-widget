@@ -44,6 +44,14 @@ beforeEach(() => {
 })
 
 describe('external work Linear rejection sync', () => {
+  it('ignores Linear sync after the rejection version changes', async () => {
+    vi.mocked(getComment).mockResolvedValueOnce({
+      id: 'comment', projectId: 'project', reviewStatus: 'open', updatedAt: 'version-2',
+    } as never)
+    await closeLinkedLinearIssue('project', 'comment', 'version-1')
+    expect(getCommentExternalWork).not.toHaveBeenCalled()
+  })
+
   it('closes a stored Linear issue and records completion', async () => {
     await closeLinkedLinearIssue('project', 'comment', 'version-1')
     expect(closeLinearIssue).toHaveBeenCalledWith('linear-token', expect.objectContaining({
@@ -115,6 +123,14 @@ describe('external work Linear rejection sync', () => {
 })
 
 describe('external work Jira rejection sync', () => {
+  it('ignores Jira sync after the rejection version changes', async () => {
+    vi.mocked(getComment).mockResolvedValueOnce({
+      id: 'comment', projectId: 'project', reviewStatus: 'open', updatedAt: 'version-2',
+    } as never)
+    await closeLinkedJiraIssue('project', 'comment', 'version-1')
+    expect(getCommentExternalWork).not.toHaveBeenCalled()
+  })
+
   it('closes a stored Jira issue and records completion', async () => {
     await closeLinkedJiraIssue('project', 'comment', 'version-1')
     expect(closeJiraIssue).toHaveBeenCalledWith('jira-token', expect.objectContaining({
@@ -234,7 +250,6 @@ describe('external work GitHub rejection sync', () => {
     vi.mocked(closeGithubIssue).mockRejectedValueOnce(new Error('github_issue_close_failed'))
     await closeLinkedGithubIssue('project', 'comment')
     expect(failExternalWorkClose).toHaveBeenCalledWith('work', expect.any(String), 'github_issue_close_failed')
-
     vi.mocked(closeGithubIssue).mockRejectedValueOnce('non-error failure')
     await closeLinkedGithubIssue('project', 'comment')
     expect(failExternalWorkClose).toHaveBeenLastCalledWith('work', expect.any(String), 'github_issue_close_failed')

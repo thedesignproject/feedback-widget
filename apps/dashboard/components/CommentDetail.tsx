@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { getExternalWorkDraft, sendExternalWork, type ExternalWorkDraft, type ExternalWorkProvider } from '../api'
+import { getExternalWorkDraft, retryExternalWorkSync, sendExternalWork, type ExternalWorkDraft, type ExternalWorkProvider, type ExternalWorkRecord } from '../api'
 import { cn } from '../lib/utils'
 import { getDisplayStatus } from '../lib/comment'
 import { timeAgo, truncateUrl } from '../lib/format'
@@ -23,6 +23,75 @@ import { ExternalWorkProviderDialog } from './ExternalWorkProviderDialog'
 
 const providerLabel = (provider: ExternalWorkProvider) =>
   provider === 'github' ? 'GitHub' : provider === 'linear' ? 'Linear' : 'Jira'
+
+function externalWorkRecord(provider: ExternalWorkProvider, value: {
+  issueNumber?: number
+  issueUrl?: string
+  externalId?: string
+  externalKey?: string
+  externalUrl?: string
+  createdAt: string
+}) {
+  const externalUrl = value.externalUrl ?? value.issueUrl
+  const externalId = value.externalId ?? (value.issueNumber ? String(value.issueNumber) : undefined)
+  const externalKey = value.externalKey ?? (value.issueNumber ? `#${value.issueNumber}` : undefined)
+  if (!externalUrl || !externalId || !externalKey) return null
+  return {
+    provider,
+    externalId,
+    externalKey,
+    externalUrl,
+    lifecycleStatus: 'active',
+    closedAt: null,
+    createdAt: value.createdAt,
+    updatedAt: value.createdAt,
+  } satisfies ExternalWorkRecord
+}
+
+function lifecycleLabel(status: ExternalWorkRecord['lifecycleStatus']) {
+  if (status === 'closing') return ' · Closing…'
+  if (status === 'closed') return ' · Closed'
+  if (status === 'failed') return ' · Close failed'
+  if (status === 'blocked') return ' · Needs attention'
+  return ''
+}
+
+function safeExternalWorkUrl(work: ExternalWorkRecord) {
+  try {
+    const url = new URL(work.externalUrl)
+    if (url.protocol !== 'https:') return null
+    if (work.provider === 'github') {
+      return url.hostname === 'github.com' && /^\/[^/]+\/[^/]+\/issues\/\d+\/?$/.test(url.pathname) ? url.toString() : null
+    }
+    if (work.provider === 'linear') {
+      return url.hostname === 'linear.app' ? url.toString() : null
+    }
+    return url.hostname.endsWith('.atlassian.net') && /^\/browse\/[^/]+\/?$/.test(url.pathname) ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
+function preferRememberedWork(server: ExternalWorkRecord, remembered: ExternalWorkRecord) {
+  const terminal = (status: ExternalWorkRecord['lifecycleStatus']) => (
+    status === 'closed' || status === 'failed' || status === 'blocked'
+  )
+  if (terminal(server.lifecycleStatus) && !terminal(remembered.lifecycleStatus)) return false
+  if (terminal(remembered.lifecycleStatus) && !terminal(server.lifecycleStatus)) return true
+  const serverTime = Date.parse(server.updatedAt)
+  const rememberedTime = Date.parse(remembered.updatedAt)
+  if (Number.isFinite(serverTime) && Number.isFinite(rememberedTime)) return rememberedTime > serverTime
+  return remembered.lifecycleStatus !== 'active' || server.lifecycleStatus === 'active'
+}
+
+function syncRemediation(work: ExternalWorkRecord) {
+  const provider = providerLabel(work.provider)
+  if (work.syncAction === 'reconnect') return `Reconnect ${provider} in Project Settings, then retry.`
+  if (work.syncAction === 'check_permissions') return `Grant ${provider} permission to update this issue, then retry.`
+  if (work.syncAction === 'check_issue') return `Check that the ${provider} issue still exists and matches this project.`
+  if (work.syncAction === 'configure_workflow') return `Configure a usable rejected or canceled workflow state in ${provider}, then retry.`
+  return `Resolve the ${provider} issue configuration, then retry.`
+}
 
 interface CommentDetailProps {
   selectedComment: Comment | null
@@ -69,28 +138,65 @@ export function CommentDetail({
 }: CommentDetailProps | PersonalDetailProps) {
   const [issueBusy, setIssueBusy] = useState(false)
   const [issueError, setIssueError] = useState<string | null>(null)
-  const [createdIssues, setCreatedIssues] = useState<Record<string, NonNullable<Comment['githubIssue']>>>({})
+  const [syncBusy, setSyncBusy] = useState(false)
+  const [createdExternalWork, setCreatedExternalWork] = useState<Record<string, ExternalWorkRecord[]>>({})
   const [externalWorkDraft, setExternalWorkDraft] = useState<ExternalWorkDraft | null>(null)
   const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const issueRequests = useRef(new Map<string, symbol>())
+  const syncRequests = useRef(new Set<string>())
   const selectedId = selectedComment?.id ?? null
   const selectedIdRef = useRef(selectedId)
   selectedIdRef.current = selectedId
-  const githubIssue = selectedComment
-    ? selectedComment.githubIssue ?? createdIssues[selectedComment.id] ?? null
-    : null
+  const linkedExternalWork = selectedComment ? (() => {
+    const byProvider = new Map((selectedComment.externalWork ?? []).map((work) => [work.provider, work]))
+    if (selectedComment.githubIssue && !byProvider.has('github')) {
+      byProvider.set('github', {
+        provider: 'github',
+        externalId: String(selectedComment.githubIssue.issueNumber),
+        externalKey: `#${selectedComment.githubIssue.issueNumber}`,
+        externalUrl: selectedComment.githubIssue.issueUrl,
+        lifecycleStatus: 'active',
+        closedAt: null,
+        createdAt: selectedComment.githubIssue.createdAt,
+        updatedAt: selectedComment.githubIssue.createdAt,
+      })
+    }
+    for (const work of createdExternalWork[selectedComment.id] ?? []) {
+      const server = byProvider.get(work.provider)
+      if (!server || preferRememberedWork(server, work)) byProvider.set(work.provider, work)
+    }
+    return [...byProvider.values()]
+  })() : []
+
+  const rememberExternalWork = (commentId: string, work: ExternalWorkRecord) => {
+    setCreatedExternalWork((current) => ({
+      ...current,
+      [commentId]: [...(current[commentId] ?? []).filter((candidate) => candidate.provider !== work.provider), work],
+    }))
+  }
+
+  const openExternalWork = (work: ExternalWorkRecord) => {
+    const url = safeExternalWorkUrl(work)
+    if (!url) {
+      setIssueError(`Could not open the ${providerLabel(work.provider)} issue because its link is invalid.`)
+      return
+    }
+    const opened = window.open(url, '_blank', 'noopener,noreferrer')
+    if (opened) opened.opener = null
+  }
 
   useEffect(() => {
     setIssueBusy(selectedId !== null && issueRequests.current.has(selectedId))
     setIssueError(null)
+    setSyncBusy(selectedId !== null && syncRequests.current.has(selectedId))
     setExternalWorkDraft(null)
     setProviderPickerOpen(false)
   }, [selectedId])
 
   const prepareExternalWork = async (comment: Comment, provider: ExternalWorkProvider) => {
-    if (provider === 'github' && githubIssue) {
-      const opened = window.open(githubIssue.issueUrl, '_blank', 'noopener,noreferrer')
-      if (opened) opened.opener = null
+    const linked = linkedExternalWork.find((work) => work.provider === provider)
+    if (linked) {
+      openExternalWork(linked)
       return
     }
     if (comment.reviewStatus === 'rejected' || issueRequests.current.has(comment.id)) return
@@ -103,15 +209,10 @@ export function CommentDetail({
       const prepared = await getExternalWorkDraft(apiBase, accessToken, commentId, provider)
       if (!prepared.connected) throw new Error(`${provider}_not_connected`)
       if (prepared.existing) {
-        const url = 'externalUrl' in prepared.existing && prepared.existing.externalUrl
-          ? prepared.existing.externalUrl
-          : 'issueUrl' in prepared.existing ? prepared.existing.issueUrl : ''
-        if (!url) throw new Error('missing_external_work_url')
-        if (provider === 'github' && 'issueUrl' in prepared.existing) {
-          setCreatedIssues((current) => ({ ...current, [commentId]: prepared.existing as NonNullable<Comment['githubIssue']> }))
-        }
-        const opened = window.open(url, '_blank', 'noopener,noreferrer')
-        if (opened) opened.opener = null
+        const remembered = externalWorkRecord(provider, prepared.existing)
+        if (!remembered) throw new Error('missing_external_work_identity')
+        rememberExternalWork(commentId, remembered)
+        openExternalWork(remembered)
       } else if (selectedIdRef.current === commentId) {
         setExternalWorkDraft(prepared)
       }
@@ -137,14 +238,11 @@ export function CommentDetail({
       const result = await sendExternalWork(apiBase, accessToken, commentId, provider, draft)
       const url = result.externalUrl ?? result.issueUrl
       if (!url) throw new Error('missing_external_work_url')
-      if (provider === 'github' && result.issueNumber) setCreatedIssues((current) => ({ ...current, [commentId]: {
-        issueNumber: result.issueNumber!, issueUrl: url, createdAt: result.createdAt,
-      } }))
+      const remembered = externalWorkRecord(provider, result)
+      if (!remembered) throw new Error('missing_external_work_identity')
+      rememberExternalWork(commentId, remembered)
       setExternalWorkDraft(null)
-      if (provider !== 'github') {
-        const opened = window.open(url, '_blank', 'noopener,noreferrer')
-        if (opened) opened.opener = null
-      }
+      if (provider !== 'github') openExternalWork(remembered)
     } catch {
       if (selectedIdRef.current === commentId) {
         setIssueError('Could not create the external issue. Try again.')
@@ -152,6 +250,25 @@ export function CommentDetail({
     } finally {
       issueRequests.current.delete(commentId)
       if (selectedIdRef.current === commentId) setIssueBusy(false)
+    }
+  }
+
+  const retryExternalWork = async (comment: Comment) => {
+    const commentId = comment.id
+    if (syncRequests.current.has(commentId)) return
+    syncRequests.current.add(commentId)
+    setSyncBusy(true)
+    setIssueError(null)
+    try {
+      const result = await retryExternalWorkSync(apiBase, accessToken, commentId)
+      if (selectedIdRef.current === commentId) {
+        setCreatedExternalWork((current) => ({ ...current, [commentId]: result.externalWork }))
+      }
+    } catch {
+      if (selectedIdRef.current === commentId) setIssueError('Could not retry closing the linked issues. Try again.')
+    } finally {
+      syncRequests.current.delete(commentId)
+      if (selectedIdRef.current === commentId) setSyncBusy(false)
     }
   }
 
@@ -326,18 +443,44 @@ export function CommentDetail({
                 </ActionBtn>
               )}
 
+              {linkedExternalWork.map((work) => (
+                <ActionBtn key={work.provider} variant="neutral" onClick={() => openExternalWork(work)}>
+                  <ExternalLinkIcon size={13} /> Open {providerLabel(work.provider)} {work.externalKey}{lifecycleLabel(work.lifecycleStatus)}
+                </ActionBtn>
+              ))}
+
+              {selectedComment.reviewStatus === 'rejected' && linkedExternalWork
+                .filter((work) => work.lifecycleStatus === 'blocked')
+                .map((work) => (
+                  <span key={`${work.provider}-remediation`} className="text-xs text-status-rejected">
+                    {syncRemediation(work)}
+                  </span>
+                ))}
+
+              {selectedComment.reviewStatus === 'rejected' && linkedExternalWork.some((work) => work.lifecycleStatus === 'failed') && (
+                <ActionBtn variant="neutral" disabled={syncBusy} onClick={() => { void retryExternalWork(selectedComment) }}>
+                  {syncBusy ? 'Retrying close…' : 'Retry closing'}
+                </ActionBtn>
+              )}
+
+              {selectedComment.reviewStatus === 'rejected' && linkedExternalWork.some((work) => work.lifecycleStatus === 'blocked') && (
+                <ActionBtn variant="neutral" disabled={syncBusy} onClick={() => { void retryExternalWork(selectedComment) }}>
+                  {syncBusy ? 'Retrying close…' : 'Retry after fixing'}
+                </ActionBtn>
+              )}
+
               {!personal && !readOnly && <span
                 className="relative inline-flex group"
               >
                 <ActionBtn
                   variant="neutral"
                   onClick={() => setProviderPickerOpen(true)}
-                  disabled={!selectedProject || (!githubIssue && selectedComment.reviewStatus === 'rejected') || issueBusy}
+                  disabled={!selectedProject || selectedComment.reviewStatus === 'rejected' || issueBusy}
                 >
                   <ExternalLinkIcon size={13} />
                   {issueBusy
                     ? 'Preparing issue…'
-                    : selectedComment.reviewStatus === 'rejected' && !githubIssue
+                    : selectedComment.reviewStatus === 'rejected'
                       ? 'Reopen to send'
                       : 'Send to…'}
                 </ActionBtn>

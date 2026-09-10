@@ -303,12 +303,15 @@ describe('Jira integration client', () => {
         { id: 'one', name: 'Ship', to: { statusCategory: { key: 'done' } } },
         { id: 'two', name: 'Archive', to: { statusCategory: { key: 'done' } } },
       ] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(active), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ fields: {} }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(active), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
     vi.stubGlobal('fetch', fetch)
     const input = { cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker' }
     await expect(closeJiraIssue('access', input)).resolves.toBeUndefined()
+    await expect(closeJiraIssue('access', input)).rejects.toThrow('jira_rejection_transition_unavailable')
     await expect(closeJiraIssue('access', input)).rejects.toThrow('jira_rejection_transition_unavailable')
     await expect(closeJiraIssue('access', input)).rejects.toThrow('jira_issue_status_invalid')
     await expect(closeJiraIssue('access', input)).rejects.toThrow('jira_rejection_transition_unavailable')
