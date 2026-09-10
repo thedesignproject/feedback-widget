@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { VercelRequest, VercelResponse } from '@vercel/node'
+import { waitUntil } from '@vercel/functions'
 import { requireProjectCapability, requireProjectCommentCapability, requireUser } from '../../../_lib/auth.js'
 import { generateCommentIssueContent } from '../../../_lib/comment-issue-content.js'
 import {
@@ -10,8 +11,10 @@ import {
   formatGithubIssueBody,
 } from '../../../_lib/github-issues.js'
 import { createInstallationAccessToken } from '../../../_lib/github-app.js'
+import { closeLinkedGithubIssue } from '../../../_lib/external-work-sync.js'
 import { getStringQuery, handleOptions, jsonError, methodNotAllowed, setCors } from '../../../_lib/http.js'
 import {
+  acceptCommentIfOpen,
   claimCommentGithubIssue,
   finalizeCommentGithubIssue,
   getComment,
@@ -20,7 +23,6 @@ import {
   markCommentGithubIssueUncertain,
   releaseCommentGithubIssue,
   resetCommentGithubIssueAttempt,
-  updateReviewStatus,
 } from '../../../_lib/store.js'
 
 const METHODS = ['POST', 'OPTIONS']
@@ -63,6 +65,14 @@ async function finalizeWithRetry(
   return false
 }
 
+async function acceptOpenOrCloseRejected(projectKey: string, commentId: string) {
+  if (await acceptCommentIfOpen(projectKey, commentId)) return
+  const current = await getComment(commentId)
+  if (current?.projectId === projectKey && current.reviewStatus === 'rejected') {
+    waitUntil(closeLinkedGithubIssue(projectKey, commentId, current.updatedAt).catch(() => undefined))
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (handleOptions(req, res, METHODS)) return
   if (req.method !== 'POST') return methodNotAllowed(req, res, METHODS)
@@ -84,7 +94,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const comment = await getCommentForGithubIssue(projectKey, commentId)
     if (!comment) return jsonError(req, res, 404, 'Comment not found')
     if (comment.githubIssue) {
-      if (comment.reviewStatus === 'open') await updateReviewStatus(projectKey, commentId, 'accepted')
+      await acceptOpenOrCloseRejected(projectKey, commentId)
       setCors(req, res, METHODS)
       return res.status(200).json(issueResponse(comment.githubIssue, false))
     }
@@ -149,7 +159,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         leaseToken = null
         throw new Error('github_issue_persistence_failed')
       }
-      await updateReviewStatus(projectKey, commentId, 'accepted')
+      await acceptOpenOrCloseRejected(projectKey, commentId)
       setCors(req, res, METHODS)
       return res.status(200).json(issueResponse(recovered, false))
     }
@@ -218,7 +228,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       leaseToken = null
       throw new Error('github_issue_persistence_failed')
     }
-    await updateReviewStatus(projectKey, commentId, 'accepted')
+    await acceptOpenOrCloseRejected(projectKey, commentId)
     setCors(req, res, METHODS)
     return res.status(201).json(issueResponse(issue, true))
   } catch (error) {

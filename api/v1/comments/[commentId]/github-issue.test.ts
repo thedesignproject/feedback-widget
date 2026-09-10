@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('@vercel/functions', () => ({ waitUntil: vi.fn() }))
+
 vi.mock('../../../_lib/auth.js', () => ({
   requireUser: vi.fn(),
   requireProjectCapability: vi.fn(),
@@ -14,7 +16,9 @@ vi.mock('../../../_lib/github-issues.js', () => ({
   formatEditableGithubIssueBody: vi.fn(),
   formatGithubIssueBody: vi.fn(),
 }))
+vi.mock('../../../_lib/external-work-sync.js', () => ({ closeLinkedGithubIssue: vi.fn() }))
 vi.mock('../../../_lib/store.js', () => ({
+  acceptCommentIfOpen: vi.fn(),
   claimCommentGithubIssue: vi.fn(),
   finalizeCommentGithubIssue: vi.fn(),
   getComment: vi.fn(),
@@ -23,13 +27,14 @@ vi.mock('../../../_lib/store.js', () => ({
   markCommentGithubIssueUncertain: vi.fn(),
   releaseCommentGithubIssue: vi.fn(),
   resetCommentGithubIssueAttempt: vi.fn(),
-  updateReviewStatus: vi.fn(),
 }))
 
 import handler from './github-issue.js'
+import { waitUntil } from '@vercel/functions'
 import { requireProjectCapability, requireProjectCommentCapability, requireUser } from '../../../_lib/auth.js'
 import { generateCommentIssueContent } from '../../../_lib/comment-issue-content.js'
 import { createInstallationAccessToken } from '../../../_lib/github-app.js'
+import { closeLinkedGithubIssue } from '../../../_lib/external-work-sync.js'
 import {
   createCommentIssueMarker,
   createGithubIssue,
@@ -38,6 +43,7 @@ import {
   formatGithubIssueBody,
 } from '../../../_lib/github-issues.js'
 import {
+  acceptCommentIfOpen,
   claimCommentGithubIssue,
   finalizeCommentGithubIssue,
   getComment,
@@ -46,7 +52,6 @@ import {
   markCommentGithubIssueUncertain,
   releaseCommentGithubIssue,
   resetCommentGithubIssueAttempt,
-  updateReviewStatus,
 } from '../../../_lib/store.js'
 
 function mockRes() {
@@ -85,6 +90,7 @@ const comment = {
   targetType: 'element_point',
   anchor: null,
   reviewStatus: 'accepted',
+  updatedAt: 'version-1',
   githubIssue: null,
   githubIssueLeaseToken: 'lease-token',
   githubIssueUncertainAt: null,
@@ -102,6 +108,7 @@ const claimedLease = () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(closeLinkedGithubIssue).mockResolvedValue(undefined)
   vi.mocked(requireUser).mockResolvedValue({ userId: 'user-1', email: 'a@b.c' })
   vi.mocked(requireProjectCapability).mockResolvedValue({ role: 'member' })
   vi.mocked(requireProjectCommentCapability).mockResolvedValue({ role: 'member' })
@@ -127,7 +134,7 @@ beforeEach(() => {
   vi.mocked(markCommentGithubIssueUncertain).mockResolvedValue(true)
   vi.mocked(releaseCommentGithubIssue).mockResolvedValue(true)
   vi.mocked(resetCommentGithubIssueAttempt).mockResolvedValue(true)
-  vi.mocked(updateReviewStatus).mockResolvedValue(comment as never)
+  vi.mocked(acceptCommentIfOpen).mockResolvedValue(comment as never)
 })
 
 describe('POST comment GitHub issue', () => {
@@ -165,7 +172,7 @@ describe('POST comment GitHub issue', () => {
 
     vi.mocked(getCommentForGithubIssue).mockResolvedValueOnce({ ...comment, reviewStatus: 'open', githubIssue: issue } as never)
     expect((await call()).body).toEqual({ ...issue, created: false })
-    expect(updateReviewStatus).toHaveBeenCalledWith('project-1', 'comment-1', 'accepted')
+    expect(acceptCommentIfOpen).toHaveBeenCalledWith('project-1', 'comment-1')
 
     vi.mocked(getCommentForGithubIssue).mockResolvedValueOnce({ ...comment, reviewStatus: 'rejected' } as never)
     expect((await call()).body).toEqual({ error: 'comment_rejected' })
@@ -364,5 +371,27 @@ describe('POST comment GitHub issue', () => {
       .mockResolvedValueOnce(true)
     expect((await call()).statusCode).toBe(201)
     expect(finalizeCommentGithubIssue).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not overwrite a concurrent rejection and schedules closure after finalization', async () => {
+    vi.mocked(acceptCommentIfOpen).mockResolvedValueOnce(null)
+    vi.mocked(getComment)
+      .mockResolvedValueOnce(comment as never)
+      .mockResolvedValueOnce({ ...comment, reviewStatus: 'rejected', updatedAt: 'rejected-version' } as never)
+
+    expect((await call()).statusCode).toBe(201)
+    expect(closeLinkedGithubIssue).toHaveBeenCalledWith('project-1', 'comment-1', 'rejected-version')
+    expect(waitUntil).toHaveBeenCalledWith(expect.any(Promise))
+  })
+
+  it('does not schedule closure when the comment disappears after finalization', async () => {
+    vi.mocked(acceptCommentIfOpen).mockResolvedValueOnce(null)
+    vi.mocked(getComment)
+      .mockResolvedValueOnce(comment as never)
+      .mockResolvedValueOnce(null)
+
+    expect((await call()).statusCode).toBe(201)
+    expect(closeLinkedGithubIssue).not.toHaveBeenCalled()
+    expect(waitUntil).not.toHaveBeenCalled()
   })
 })

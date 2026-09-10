@@ -8,7 +8,7 @@ const describeDatabase = databaseUrl ? describe : describe.skip
 describeDatabase('comment GitHub issue database fencing', () => {
   const sql = postgres(databaseUrl as string, { max: 6 })
   const projectKey = `github-issue-${randomUUID()}`
-  const commentIds = Array.from({ length: 5 }, () => randomUUID())
+  const commentIds = Array.from({ length: 6 }, () => randomUUID())
   const actorUserId = randomUUID()
   const targetUserId = randomUUID()
 
@@ -36,7 +36,8 @@ describeDatabase('comment GitHub issue database fencing', () => {
         (${commentIds[1]}, ${projectKey}, 'second', 'approved'),
         (${commentIds[2]}, ${projectKey}, 'third', 'approved'),
         (${commentIds[3]}, ${projectKey}, 'fourth', 'approved'),
-        (${commentIds[4]}, ${projectKey}, 'fifth', 'approved')
+        (${commentIds[4]}, ${projectKey}, 'fifth', 'approved'),
+        (${commentIds[5]}, ${projectKey}, 'pending', 'pending')
     `
   })
 
@@ -195,6 +196,42 @@ describeDatabase('comment GitHub issue database fencing', () => {
     `
     expect(reset[0].reset).toBe(true)
     await expect(claim(commentIds[4], randomUUID())).resolves.toHaveLength(1)
+  })
+
+  it('allows pending feedback through the complete GitHub creation lifecycle', async () => {
+    const firstToken = randomUUID()
+    await expect(claim(commentIds[5], firstToken)).resolves.toHaveLength(1)
+    const marked = await sql`
+      select mark_comment_github_issue_uncertain(
+        ${commentIds[5]}::uuid,
+        ${projectKey},
+        ${firstToken}::uuid
+      ) as marked
+    `
+    expect(marked[0].marked).toBe(true)
+
+    const reset = await sql`
+      select reset_comment_github_issue_attempt(
+        ${commentIds[5]}::uuid,
+        ${projectKey},
+        ${firstToken}::uuid
+      ) as reset
+    `
+    expect(reset[0].reset).toBe(true)
+
+    const finalToken = randomUUID()
+    await expect(claim(commentIds[5], finalToken)).resolves.toHaveLength(1)
+    const finalized = await sql`
+      select finalize_comment_github_issue(
+        ${commentIds[5]}::uuid,
+        ${projectKey},
+        ${finalToken}::uuid,
+        23,
+        'https://github.com/acme/site/issues/23',
+        now()
+      ) as finalized
+    `
+    expect(finalized[0].finalized).toBe(true)
   })
 
   it('enforces all-or-none issue metadata and paired lease fields', async () => {
