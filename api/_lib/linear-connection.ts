@@ -7,6 +7,7 @@ type StoredLinearIntegration = {
   accessTokenCiphertext: string
   refreshTokenCiphertext: string | null
   tokenExpiresAt: string | null
+  grantedScopes?: string | null
 }
 
 export async function getLinearAccessToken(integration: StoredLinearIntegration) {
@@ -21,6 +22,7 @@ export async function getLinearAccessToken(integration: StoredLinearIntegration)
       ? encryptToken(tokens.refreshToken)
       : integration.refreshTokenCiphertext,
     tokenExpiresAt: tokens.expiresAt,
+    grantedScopes: tokens.grantedScopes ?? integration.grantedScopes,
   })
   return tokens.accessToken
 }

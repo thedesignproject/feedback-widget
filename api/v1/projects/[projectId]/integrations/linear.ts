@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { requireUser } from '../../../../_lib/auth.js'
 import { getLinearAccessToken } from '../../../../_lib/linear-connection.js'
-import { buildLinearAuthorizeUrl, createLinearOAuthState, getLinearWorkspace } from '../../../../_lib/linear.js'
+import { buildLinearAuthorizeUrl, createLinearOAuthState, getLinearWorkspace, hasLinearWriteScope } from '../../../../_lib/linear.js'
 import {
   deleteProjectIntegration,
   getProjectIntegration,
@@ -73,6 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       connected: Boolean(current?.containerId),
       provider: 'linear',
+      reauthorizationRequired: !hasLinearWriteScope(integration.grantedScopes),
       workspace: current?.workspaceName ?? workspace.name,
       selectedDestinationId: req.method === 'PATCH'
         ? (typeof req.body?.containerId === 'string' ? req.body.containerId : null)

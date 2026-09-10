@@ -6,6 +6,7 @@ vi.mock('../../../../_lib/linear.js', () => ({
   buildLinearAuthorizeUrl: vi.fn(() => 'https://linear.app/oauth/authorize?state=signed'),
   createLinearOAuthState: vi.fn(() => 'signed'),
   getLinearWorkspace: vi.fn(),
+  hasLinearWriteScope: vi.fn((scopes: string | null | undefined) => Boolean(scopes?.includes('write'))),
 }))
 vi.mock('../../../../_lib/store.js', () => ({
   deleteProjectIntegration: vi.fn(),
@@ -42,6 +43,7 @@ const call = (req: unknown, res: unknown) =>
 const integration = {
   id: 'integration', projectKey: 'p', provider: 'linear' as const,
   accessTokenCiphertext: 'ciphertext', refreshTokenCiphertext: 'refresh', tokenExpiresAt: null,
+  grantedScopes: 'read,write',
   workspaceId: 'workspace', workspaceName: 'Acme', containerId: 'web', containerName: 'WEB · Website',
   createdBy: 'u', createdAt: new Date(), updatedAt: new Date(),
 }
@@ -87,7 +89,7 @@ describe('Linear project integration API', () => {
     vi.mocked(getProjectIntegration).mockResolvedValue(integration as never)
     let res = mockRes()
     await call({ method: 'GET', query: { projectId: 'p' }, headers: {} }, res)
-    expect(res.body).toMatchObject({ connected: true, workspace: 'Acme', selectedDestinationId: 'web' })
+    expect(res.body).toMatchObject({ connected: true, workspace: 'Acme', selectedDestinationId: 'web', reauthorizationRequired: false })
     expect((res.body as { destinations: unknown[] }).destinations).toContainEqual({ id: 'web', name: 'WEB · Website' })
 
     res = mockRes()
@@ -102,6 +104,13 @@ describe('Linear project integration API', () => {
     expect(res.statusCode).toBe(200)
     expect(updateProjectIntegrationDestination).toHaveBeenCalledWith('p', 'linear', 'product', 'PROD · Product')
     expect(res.body).toMatchObject({ connected: true, selectedDestinationId: 'product' })
+  })
+
+  it('flags connections created without Linear write access for reconnection', async () => {
+    vi.mocked(getProjectIntegration).mockResolvedValue({ ...integration, grantedScopes: 'read,issues:create' } as never)
+    const res = mockRes()
+    await call({ method: 'GET', query: { projectId: 'p' }, headers: {} }, res)
+    expect(res.body).toMatchObject({ connected: true, reauthorizationRequired: true })
   })
 
   it('disconnects without returning integration data', async () => {

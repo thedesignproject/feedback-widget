@@ -75,6 +75,7 @@ export interface ProjectTrackerIntegration {
   workspace?: string
   selectedDestinationId?: string | null
   destinations: Array<{ id: string; name: string }>
+  reauthorizationRequired?: boolean
 }
 
 export interface ExtensionCommentRecord {

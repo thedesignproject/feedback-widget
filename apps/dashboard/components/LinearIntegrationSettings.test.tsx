@@ -108,6 +108,18 @@ describe('<LinearIntegrationSettings />', () => {
     expect(await screen.findByRole('button', { name: 'Connect Linear' })).toBeInTheDocument()
   })
 
+  it('offers reconnection when the saved authorization lacks write access', async () => {
+    vi.mocked(getLinearIntegration)
+      .mockResolvedValueOnce({ ...connected, reauthorizationRequired: true })
+      .mockResolvedValueOnce({ ...connected, reauthorizationRequired: true, authorizeUrl: 'https://linear.app/oauth/authorize' })
+    const popup = { closed: false } as Window
+    vi.spyOn(window, 'open').mockReturnValue(popup)
+    render(<LinearIntegrationSettings {...props} />)
+    expect(await screen.findByRole('status')).toHaveTextContent('Reconnect Linear')
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
+    await waitFor(() => expect(window.open).toHaveBeenCalledWith('https://linear.app/oauth/authorize', 'crrt-linear-connect'))
+  })
+
   it('rejects invalid authorization URLs and blocked popups', async () => {
     vi.mocked(getLinearIntegration)
       .mockResolvedValueOnce({ provider: 'linear', connected: false, destinations: [] })
