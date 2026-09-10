@@ -99,6 +99,7 @@ type GitHubUserInstallationRow = {
 }
 
 export type ExternalIntegrationProvider = 'linear' | 'jira'
+export type ExternalWorkProvider = 'github' | ExternalIntegrationProvider
 
 type ProjectIntegrationRow = {
   id: string
@@ -120,14 +121,21 @@ type CommentExternalWorkRow = {
   id: string
   project_id: string
   comment_id: string
-  provider: ExternalIntegrationProvider
+  provider: ExternalWorkProvider
   state: 'creating' | 'created'
+  workspace_id: string | null
+  container_id: string | null
   external_id: string | null
   external_key: string | null
   external_url: string | null
   lease_token: string
   lease_expires_at: string
   uncertain_at: string | null
+  lifecycle_status: 'active' | 'closing' | 'closed' | 'failed' | 'blocked'
+  sync_lease_token: string | null
+  sync_lease_expires_at: string | null
+  last_sync_error: string | null
+  closed_at: string | null
   created_at: string
   updated_at: string
 }
@@ -141,7 +149,7 @@ const GITHUB_USER_INSTALLATION_COLUMNS =
 const PROJECT_INTEGRATION_COLUMNS =
   'id, project_key, provider, access_token_ciphertext, refresh_token_ciphertext, token_expires_at, workspace_id, workspace_name, container_id, container_name, created_by, created_at, updated_at'
 const COMMENT_EXTERNAL_WORK_COLUMNS =
-  'id, project_id, comment_id, provider, state, external_id, external_key, external_url, lease_token, lease_expires_at, uncertain_at, created_at, updated_at'
+  'id, project_id, comment_id, provider, state, workspace_id, container_id, external_id, external_key, external_url, lease_token, lease_expires_at, uncertain_at, lifecycle_status, sync_lease_token, sync_lease_expires_at, last_sync_error, closed_at, created_at, updated_at'
 
 function mapProjectIntegration(row: ProjectIntegrationRow) {
   return {
@@ -168,12 +176,19 @@ function mapCommentExternalWork(row: CommentExternalWorkRow) {
     commentId: row.comment_id,
     provider: row.provider,
     state: row.state,
+    workspaceId: row.workspace_id,
+    containerId: row.container_id,
     externalId: row.external_id,
     externalKey: row.external_key,
     externalUrl: row.external_url,
     leaseToken: row.lease_token,
     leaseExpiresAt: row.lease_expires_at,
     uncertainAt: row.uncertain_at,
+    lifecycleStatus: row.lifecycle_status,
+    syncLeaseToken: row.sync_lease_token,
+    syncLeaseExpiresAt: row.sync_lease_expires_at,
+    lastSyncError: row.last_sync_error,
+    closedAt: row.closed_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -1217,7 +1232,7 @@ export async function deleteProjectIntegration(projectKey: string, provider: Ext
   if (error) throw new Error(error.message)
 }
 
-export async function getCommentExternalWork(commentId: string, provider: ExternalIntegrationProvider) {
+export async function getCommentExternalWork(commentId: string, provider: ExternalWorkProvider) {
   const { data, error } = await getSupabase()
     .from('comment_external_work')
     .select(COMMENT_EXTERNAL_WORK_COLUMNS)
@@ -1228,10 +1243,20 @@ export async function getCommentExternalWork(commentId: string, provider: Extern
   return data ? mapCommentExternalWork(data as CommentExternalWorkRow) : null
 }
 
+export async function listCommentExternalWork(commentId: string) {
+  const { data, error } = await getSupabase()
+    .from('comment_external_work')
+    .select(COMMENT_EXTERNAL_WORK_COLUMNS)
+    .eq('comment_id', commentId)
+    .eq('state', 'created')
+  if (error) throw new Error(error.message)
+  return ((data ?? []) as CommentExternalWorkRow[]).map(mapCommentExternalWork)
+}
+
 export async function claimCommentExternalWork(input: {
   projectId: string
   commentId: string
-  provider: ExternalIntegrationProvider
+  provider: ExternalWorkProvider
   leaseToken: string
 }) {
   const now = new Date()
@@ -1298,11 +1323,15 @@ export async function finalizeCommentExternalWork(input: {
   externalId: string
   externalKey: string
   externalUrl: string
+  workspaceId: string
+  containerId: string
 }) {
   const { data, error } = await getSupabase()
     .from('comment_external_work')
     .update({
       state: 'created',
+      workspace_id: input.workspaceId,
+      container_id: input.containerId,
       external_id: input.externalId,
       external_key: input.externalKey,
       external_url: input.externalUrl,
