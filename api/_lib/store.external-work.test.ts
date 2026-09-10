@@ -8,6 +8,7 @@ import {
   deleteProjectIntegration,
   finalizeCommentExternalWork,
   getCommentExternalWork,
+  listCommentExternalWork,
   getProjectIntegration,
   markCommentExternalWorkUncertain,
   releaseCommentExternalWork,
@@ -26,8 +27,11 @@ const integrationRow = {
 }
 const workRow = {
   id: 'work', project_id: 'project', comment_id: 'comment', provider: 'linear', state: 'creating',
+  workspace_id: null, container_id: null,
   external_id: null, external_key: null, external_url: null, lease_token: 'old-lease',
-  lease_expires_at: '2999-01-01T00:00:00.000Z', uncertain_at: null, created_at: 'created', updated_at: 'updated',
+  lease_expires_at: '2999-01-01T00:00:00.000Z', uncertain_at: null, lifecycle_status: 'active',
+  sync_lease_token: null, sync_lease_expires_at: null, last_sync_error: null,
+  closed_at: null, created_at: 'created', updated_at: 'updated',
 }
 
 function builder(result: Result) {
@@ -40,10 +44,13 @@ function builder(result: Result) {
 }
 
 function queue(...results: Result[]) {
+  const builders: Array<Record<string, unknown>> = []
   for (const result of results) {
     const value = builder(result)
+    builders.push(value)
     vi.mocked(getServiceSupabase).mockReturnValueOnce({ from: vi.fn(() => value) } as never)
   }
+  return builders
 }
 
 beforeEach(() => vi.mocked(getServiceSupabase).mockReset())
@@ -101,6 +108,21 @@ describe('external integration persistence', () => {
     await expect(getCommentExternalWork('comment', 'linear')).rejects.toThrow('read failed')
   })
 
+  it('lists every created external-work record for a comment', async () => {
+    const [list] = queue(
+      { data: [{ ...workRow, state: 'created', workspace_id: 'workspace', container_id: 'team' }], error: null },
+      { data: null, error: null },
+      { data: null, error: { message: 'list failed' } },
+    )
+    await expect(listCommentExternalWork('comment')).resolves.toEqual([
+      expect.objectContaining({ provider: 'linear', workspaceId: 'workspace', containerId: 'team' }),
+    ])
+    expect(list.eq).toHaveBeenCalledWith('comment_id', 'comment')
+    expect(list.eq).toHaveBeenCalledWith('state', 'created')
+    await expect(listCommentExternalWork('comment')).resolves.toEqual([])
+    await expect(listCommentExternalWork('comment')).rejects.toThrow('list failed')
+  })
+
   it('claims newly inserted work and rejects non-conflict insert failures', async () => {
     queue({ data: workRow, error: null }, { data: null, error: { message: 'insert failed', code: '500' } })
     await expect(claimCommentExternalWork({ projectId: 'project', commentId: 'comment', provider: 'linear', leaseToken: 'new' }))
@@ -134,7 +156,7 @@ describe('external integration persistence', () => {
   })
 
   it('marks uncertainty, finalizes, and releases with fenced error handling', async () => {
-    queue(
+    const operations = queue(
       { data: { id: 'work' }, error: null }, { data: null, error: null }, { data: null, error: { message: 'mark failed' } },
       { data: { ...workRow, state: 'created', external_id: 'i', external_key: 'WEB-1', external_url: 'url' }, error: null },
       { data: null, error: null }, { data: null, error: { message: 'finalize failed' } },
@@ -143,8 +165,18 @@ describe('external integration persistence', () => {
     await expect(markCommentExternalWorkUncertain('work', 'lease')).resolves.toBe(true)
     await expect(markCommentExternalWorkUncertain('work', 'lease')).resolves.toBe(false)
     await expect(markCommentExternalWorkUncertain('work', 'lease')).rejects.toThrow('mark failed')
-    const result = { id: 'work', leaseToken: 'lease', externalId: 'i', externalKey: 'WEB-1', externalUrl: 'url' }
+    const result = {
+      id: 'work', leaseToken: 'lease', externalId: 'i', externalKey: 'WEB-1', externalUrl: 'url',
+      workspaceId: 'workspace', containerId: 'team',
+    }
     await expect(finalizeCommentExternalWork(result)).resolves.toMatchObject({ state: 'created', externalUrl: 'url' })
+    expect(operations[3].update).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'created', workspace_id: 'workspace', container_id: 'team',
+      external_id: 'i', external_key: 'WEB-1', external_url: 'url',
+    }))
+    expect(operations[3].eq).toHaveBeenCalledWith('id', 'work')
+    expect(operations[3].eq).toHaveBeenCalledWith('lease_token', 'lease')
+    expect(operations[3].eq).toHaveBeenCalledWith('state', 'creating')
     await expect(finalizeCommentExternalWork(result)).resolves.toBeNull()
     await expect(finalizeCommentExternalWork(result)).rejects.toThrow('finalize failed')
     await expect(releaseCommentExternalWork('work', 'lease')).resolves.toBeUndefined()

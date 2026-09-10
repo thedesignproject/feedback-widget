@@ -121,7 +121,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 description: body,
               })
             })()
-        const finalized = await finalizeCommentExternalWork({ id: claim.id, leaseToken, ...result })
+        const finalized = await finalizeCommentExternalWork({
+          id: claim.id,
+          leaseToken,
+          workspaceId: integration.workspaceId,
+          containerId: integration.containerId,
+          ...result,
+        })
         if (!finalized) throw new Error(`${provider}_issue_persistence_failed`)
         await updateReviewStatus(publicComment.projectId, commentId, 'accepted')
         setCors(req, res, METHODS)

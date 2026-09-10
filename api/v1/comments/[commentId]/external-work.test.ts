@@ -144,7 +144,9 @@ describe('external work endpoint', () => {
     await call({ method: 'POST', query: { commentId: 'c' }, body: { provider: 'linear', draft: { title: 'Edited', body: 'Details' } }, headers: {} }, created)
     expect(created.statusCode).toBe(201)
     expect(createLinearIssue).toHaveBeenCalledWith('linear-token', { teamId: 'team', title: 'Edited', description: 'Details' })
-    expect(finalizeCommentExternalWork).toHaveBeenCalledWith(expect.objectContaining({ externalKey: 'WEB-1' }))
+    expect(finalizeCommentExternalWork).toHaveBeenCalledWith(expect.objectContaining({
+      externalKey: 'WEB-1', workspaceId: 'workspace', containerId: 'team',
+    }))
   })
 
   it('prepares disconnected and already-created Linear work without leaking tokens', async () => {
@@ -260,7 +262,9 @@ describe('external work endpoint', () => {
       cloudId: 'cloud', siteUrl: 'https://acme.atlassian.net', projectId: '100',
       title: 'Edited for Jira', description: 'Jira details',
     })
-    expect(finalizeCommentExternalWork).toHaveBeenCalledWith(expect.objectContaining({ externalKey: 'WEB-2' }))
+    expect(finalizeCommentExternalWork).toHaveBeenCalledWith(expect.objectContaining({
+      externalKey: 'WEB-2', workspaceId: 'cloud', containerId: '100',
+    }))
   })
 
   it('rejects Jira creation when the selected project is no longer available', async () => {
