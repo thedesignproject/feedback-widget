@@ -161,10 +161,24 @@ async function jiraRequest<T>(accessToken: string, path: string, init: RequestIn
   } catch {
     throw new Error(indeterminate ? 'jira_result_indeterminate' : 'jira_request_failed')
   }
+  if (!response.ok) {
+    const code = response.status === 401
+      ? 'jira_reauthorization_required'
+      : response.status === 403
+        ? 'jira_permission_denied'
+        : response.status === 404
+          ? 'jira_resource_not_found'
+          : response.status === 409
+            ? 'jira_conflict'
+            : response.status === 429
+              ? 'jira_rate_limited'
+              : 'jira_request_failed'
+    throw new Error(code)
+  }
+  if (response.status === 204) return undefined as T
   let body: T
   try { body = await response.json() as T }
   catch { throw new Error(indeterminate ? 'jira_result_indeterminate' : 'jira_request_failed') }
-  if (!response.ok) throw new Error('jira_request_failed')
   return body
 }
 
@@ -247,4 +261,87 @@ export async function createJiraIssue(accessToken: string, input: {
   catch { throw new Error('jira_site_invalid') }
   if (site.protocol !== 'https:' || !site.hostname.endsWith('.atlassian.net')) throw new Error('jira_site_invalid')
   return { externalId: result.id, externalKey: result.key, externalUrl: `${site.origin}/browse/${encodeURIComponent(result.key)}` }
+}
+
+type JiraTransition = {
+  id: string
+  name: string
+  to?: { statusCategory?: { key?: string } }
+  fields?: Record<string, { required?: boolean; hasDefaultValue?: boolean }>
+}
+
+function selectJiraRejectionTransition(transitions: JiraTransition[]) {
+  const done = transitions.filter((transition) => (
+    transition.id && transition.to?.statusCategory?.key === 'done'
+  ))
+  const compatible = done.filter((transition) => Object.values(transition.fields ?? {}).every((field) => (
+    !field.required || field.hasDefaultValue
+  )))
+  if (done.length > 0 && compatible.length === 0) throw new Error('jira_transition_fields_required')
+  const preferredNames = [/reject/i, /won.?t do/i, /not planned/i, /cancel/i, /declin/i, /close/i]
+  for (const pattern of preferredNames) {
+    const transition = compatible.find((candidate) => pattern.test(candidate.name))
+    if (transition) return transition
+  }
+  return compatible.length === 1 ? compatible[0] : null
+}
+
+export async function closeJiraIssue(accessToken: string, input: {
+  cloudId: string
+  issueId: string
+  comment: string
+  marker: string
+  beforeClose?: () => Promise<boolean>
+}) {
+  const issuePath = `/ex/jira/${encodeURIComponent(input.cloudId)}/rest/api/3/issue/${encodeURIComponent(input.issueId)}`
+  const issue = await jiraRequest<{ fields?: { status?: { statusCategory?: { key?: string } } } }>(
+    accessToken,
+    `${issuePath}?fields=status`,
+  )
+  const statusCategory = issue.fields?.status?.statusCategory?.key
+  if (!statusCategory) throw new Error('jira_issue_status_invalid')
+
+  const commentBody = adf(`${input.comment}\n\n${input.marker}`)
+  if (statusCategory === 'done') {
+    let startAt = 0
+    for (;;) {
+      const comments = await jiraRequest<{
+        comments?: Array<{ body?: unknown }>
+        startAt?: number
+        total?: number
+        isLast?: boolean
+      }>(accessToken, `${issuePath}/comment?maxResults=100&startAt=${startAt}`)
+      const page = comments.comments ?? []
+      if (page.some((comment) => JSON.stringify(comment.body).includes(input.marker))) return
+      const next = (typeof comments.startAt === 'number' ? comments.startAt : startAt) + page.length
+      if (
+        page.length === 0
+        || comments.isLast === true
+        || (typeof comments.total === 'number' && next >= comments.total)
+        || (comments.total === undefined && page.length < 100)
+      ) break
+      startAt = next
+    }
+    if (input.beforeClose && !(await input.beforeClose())) throw new Error('external_work_sync_cancelled')
+    await jiraRequest(accessToken, `${issuePath}/comment`, {
+      method: 'POST',
+      body: JSON.stringify({ body: commentBody }),
+    }, true)
+    return
+  }
+
+  const transitionResult = await jiraRequest<{ transitions?: JiraTransition[] }>(
+    accessToken,
+    `${issuePath}/transitions?expand=transitions.fields`,
+  )
+  const transition = selectJiraRejectionTransition(transitionResult.transitions ?? [])
+  if (!transition) throw new Error('jira_rejection_transition_unavailable')
+  if (input.beforeClose && !(await input.beforeClose())) throw new Error('external_work_sync_cancelled')
+  await jiraRequest(accessToken, `${issuePath}/transitions`, {
+    method: 'POST',
+    body: JSON.stringify({
+      transition: { id: transition.id },
+      update: { comment: [{ add: { body: commentBody } }] },
+    }),
+  }, true)
 }

@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildJiraAuthorizeUrl,
+  closeJiraIssue,
   createJiraIssue,
   createJiraOAuthState,
   exchangeJiraCode,
@@ -150,6 +151,21 @@ describe('Jira integration client', () => {
     await expect(getJiraDestinations('access')).rejects.toThrow('jira_request_failed')
   })
 
+  it('classifies actionable Jira HTTP failures without leaking response details', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    for (const [status, code] of [
+      [401, 'jira_reauthorization_required'],
+      [403, 'jira_permission_denied'],
+      [404, 'jira_resource_not_found'],
+      [409, 'jira_conflict'],
+      [429, 'jira_rate_limited'],
+    ] as const) {
+      fetch.mockResolvedValueOnce(new Response('private provider response', { status }))
+      await expect(getJiraDestinations('access')).rejects.toThrow(code)
+    }
+  })
+
   it('creates a task with an ADF description and treats an ambiguous POST as indeterminate', async () => {
     const issueTypes = new Response(JSON.stringify({
       issueTypes: [{ id: 'bug', name: 'Bug' }, { id: 'task', name: 'Task' }],
@@ -217,5 +233,147 @@ describe('Jira integration client', () => {
         .mockResolvedValueOnce(new Response(JSON.stringify({ id: '200', key: 'WEB-1' }), { status: 201 }))
       await expect(createJiraIssue('access', { ...input, siteUrl })).rejects.toThrow('jira_site_invalid')
     }
+  })
+
+  it('uses the preferred terminal transition and adds the rejection comment atomically', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fields: { status: { statusCategory: { key: 'indeterminate' } } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transitions: [
+        { id: 'close', name: 'Close', to: { statusCategory: { key: 'done' } } },
+        { id: 'reject', name: 'Reject feedback', to: { statusCategory: { key: 'done' } } },
+        { id: 'progress', name: 'Start', to: { statusCategory: { key: 'indeterminate' } } },
+      ] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetch)
+    await closeJiraIssue('access', {
+      cloudId: 'cloud/id', issueId: '100/1', comment: 'Rejected', marker: '<!-- marker -->',
+      beforeClose: async () => true,
+    })
+    expect(fetch.mock.calls[0]?.[0]).toContain('/cloud%2Fid/')
+    expect(fetch.mock.calls[0]?.[0]).toContain('/100%2F1?fields=status')
+    const body = JSON.parse(String(fetch.mock.calls[2]?.[1]?.body))
+    expect(body.transition).toEqual({ id: 'reject' })
+    expect(body.update.comment[0].add.body).toMatchObject({ type: 'doc', version: 1 })
+    expect(JSON.stringify(body)).toContain('marker')
+  })
+
+  it('does not duplicate the marker on a completed Jira issue', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fields: { status: { statusCategory: { key: 'done' } } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ comments: [{ body: { content: [{ text: 'existing marker' }] } }] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    await closeJiraIssue('access', { cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker' })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('adds a missing marker to an already completed Jira issue', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fields: { status: { statusCategory: { key: 'done' } } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ comments: [{ body: { content: [{ text: 'older' }] } }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'comment' }), { status: 201 }))
+    vi.stubGlobal('fetch', fetch)
+    await closeJiraIssue('access', {
+      cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker', beforeClose: async () => true,
+    })
+    expect(fetch.mock.calls[2]?.[0]).toContain('/issue/100/comment')
+    expect(fetch.mock.calls[2]?.[1]).toMatchObject({ method: 'POST' })
+  })
+
+  it('treats a missing completed-issue comment collection as empty', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fields: { status: { statusCategory: { key: 'done' } } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'comment' }), { status: 201 }))
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(closeJiraIssue('access', {
+      cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker',
+    })).resolves.toBeUndefined()
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('falls back to a sole done transition but rejects ambiguous or invalid workflows', async () => {
+    const active = { fields: { status: { statusCategory: { key: 'new' } } } }
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(active), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transitions: [{ id: 'done', name: 'Ship', to: { statusCategory: { key: 'done' } } }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(active), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transitions: [
+        { id: 'one', name: 'Ship', to: { statusCategory: { key: 'done' } } },
+        { id: 'two', name: 'Archive', to: { statusCategory: { key: 'done' } } },
+      ] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fields: {} }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(active), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const input = { cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker' }
+    await expect(closeJiraIssue('access', input)).resolves.toBeUndefined()
+    await expect(closeJiraIssue('access', input)).rejects.toThrow('jira_rejection_transition_unavailable')
+    await expect(closeJiraIssue('access', input)).rejects.toThrow('jira_issue_status_invalid')
+    await expect(closeJiraIssue('access', input)).rejects.toThrow('jira_rejection_transition_unavailable')
+  })
+
+  it('skips transitions that require unsupported fields and reports when none are safe', async () => {
+    const active = { fields: { status: { statusCategory: { key: 'new' } } } }
+    const required = { customfield_1: { required: true, hasDefaultValue: false } }
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(active), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transitions: [
+        { id: 'reject', name: 'Reject', to: { statusCategory: { key: 'done' } }, fields: required },
+        { id: 'close', name: 'Close', to: { statusCategory: { key: 'done' } }, fields: {} },
+      ] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(active), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transitions: [
+        { id: 'reject', name: 'Reject', to: { statusCategory: { key: 'done' } }, fields: required },
+      ] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const input = { cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker' }
+    await closeJiraIssue('access', input)
+    expect(JSON.parse(String(fetch.mock.calls[2]?.[1]?.body)).transition).toEqual({ id: 'close' })
+    await expect(closeJiraIssue('access', input)).rejects.toThrow('jira_transition_fields_required')
+  })
+
+  it('paginates completed-issue comments and cancels stale mutations', async () => {
+    const done = { fields: { status: { statusCategory: { key: 'done' } } } }
+    const firstPage = Array.from({ length: 100 }, () => ({ body: { content: [{ text: 'old' }] } }))
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(done), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ comments: firstPage, startAt: 0, total: 101 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ comments: [{ body: { content: [{ text: 'marker' }] } }], startAt: 100, total: 101 }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(done), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ comments: [], isLast: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+    const input = { cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker' }
+    await closeJiraIssue('access', input)
+    expect(fetch.mock.calls[2]?.[0]).toContain('startAt=100')
+    await expect(closeJiraIssue('access', { ...input, beforeClose: async () => false }))
+      .rejects.toThrow('external_work_sync_cancelled')
+    expect(fetch).toHaveBeenCalledTimes(5)
+  })
+
+  it('cancels before applying a Jira transition when rejection is stale', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fields: { status: { statusCategory: { key: 'new' } } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transitions: [
+        { id: 'cancel', name: 'Cancel', to: { statusCategory: { key: 'done' } } },
+      ] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetch)
+
+    await expect(closeJiraIssue('access', {
+      cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker', beforeClose: async () => false,
+    })).rejects.toThrow('external_work_sync_cancelled')
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats ambiguous Jira mutation transport as indeterminate', async () => {
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ fields: { status: { statusCategory: { key: 'new' } } } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ transitions: [{ id: 'cancel', name: 'Cancel', to: { statusCategory: { key: 'done' } } }] }), { status: 200 }))
+      .mockRejectedValueOnce(new Error('offline'))
+    vi.stubGlobal('fetch', fetch)
+    await expect(closeJiraIssue('access', { cloudId: 'cloud', issueId: '100', comment: 'Rejected', marker: 'marker' }))
+      .rejects.toThrow('jira_result_indeterminate')
   })
 })

@@ -286,6 +286,17 @@ describe('external work endpoint', () => {
     expect(releaseCommentExternalWork).toHaveBeenCalled()
   })
 
+  it('maps opaque Jira creation failures without treating them as deterministic', async () => {
+    vi.mocked(createJiraIssue).mockRejectedValueOnce('opaque')
+    const res = response()
+    await call({
+      method: 'POST', query: { commentId: 'c' },
+      body: { provider: 'jira', draft: { title: 'Edited for Jira', body: 'Jira details' } }, headers: {},
+    }, res)
+    expect(res.statusCode).toBe(500)
+    expect(releaseCommentExternalWork).not.toHaveBeenCalled()
+  })
+
   it('preserves a concurrent rejection and schedules closure after creation is finalized', async () => {
     vi.mocked(acceptCommentIfOpen).mockResolvedValueOnce(null)
     vi.mocked(getComment)
